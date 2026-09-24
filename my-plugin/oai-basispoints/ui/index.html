@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Basis Points · Sub2API</title><link rel="stylesheet" href="assets/style.css"></head>
+<body>
+<main>
+  <header><div class="eyebrow">SUB2API / OAUTH TRANSPORT</div><h1>Basis Points</h1><p>使用已有 OpenAI OAuth 账号连接 BPS，并适配 Codex 工具调用。</p></header>
+  <div id="notice" role="status" aria-live="polite">正在连接宿主…</div>
+  <section aria-labelledby="route-title">
+    <div class="section-title"><h2 id="route-title">路由设置</h2><span id="runtime" class="badge">未连接</span></div>
+    <label class="check"><input id="route-enabled" type="checkbox"> 将选中的账号请求发送到 BPS</label>
+    <p class="hint">启用前建议先探测。未选中的账号继续走原地址。请将试验账号放在专用分组，保持会话内使用同一账号。</p>
+    <div class="section-title"><h3>账号</h3><button id="refresh" class="secondary" type="button">刷新账号</button></div>
+    <div id="accounts" class="accounts"><p class="hint">等待账号目录…</p></div>
+    <label for="models">允许的模型（每行一个）</label>
+    <textarea id="models" rows="4" spellcheck="false" placeholder="gpt-5.6-sol"></textarea>
+    <p class="hint">沿用模型原名。默认包含 gpt-6-astra，可在下方探测账号是否支持。</p>
+    <div class="grid">
+      <div><label for="effort">未指定时的推理强度</label><select id="effort"><option>low</option><option>medium</option><option>high</option><option>xhigh</option><option>ultra</option></select></div>
+      <div><label for="timeout">请求超时（秒）</label><input id="timeout" type="number" min="10" max="3600" step="1"></div>
+      <div><label for="ttl">工具回放保留（小时）</label><input id="ttl" type="number" min="1" max="168" step="1"></div>
+    </div>
+    <label class="check"><input id="ultra" type="checkbox"> 允许实验性 ultra（原样传递，不回退到较低强度）</label>
+    <p class="hint">客户端指定的 effort 优先；max 映射为 xhigh。回放存储包含工具参数，过期后需要开启新会话。</p>
+    <button id="save" type="button">保存设置</button>
+  </section>
+  <section aria-labelledby="probe-title">
+    <h2 id="probe-title">单账号探测</h2>
+    <p class="hint">无需导出凭据，无需已有 Excel 对话。探测会使用账号额度完成一次短文本请求；成功表示当前凭据可访问 BPS，不能证明模型“不降智”。</p>
+    <div class="grid">
+      <div><label for="probe-account">账号</label><select id="probe-account"></select></div>
+      <div><label for="probe-model">模型</label><select id="probe-model"></select></div>
+      <div><label for="probe-effort">推理强度</label><select id="probe-effort"><option>low</option><option>medium</option><option>high</option><option>xhigh</option><option>ultra</option></select></div>
+    </div>
+    <button id="probe" type="button">保存设置并探测</button>
+    <div id="probe-result" class="result" role="status" aria-live="polite">尚未探测</div>
+  </section>
+  <footer>v0.1.3 · 输入内容保留原字段，由 BPS 判断是否支持。工具仅桥接串行 function/custom；原生搜索与 /responses/compact 暂未接入。</footer>
+</main>
+<script src="assets/bridge-v1.js"></script><script src="assets/model.js"></script><script src="assets/app.js"></script>
+</body></html>

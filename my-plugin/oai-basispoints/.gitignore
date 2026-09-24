@@ -1,0 +1,6 @@
+/.signing/
+/build/
+/dist/
+/node_modules/
+!/tests/
+!/tests/**

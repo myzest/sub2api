@@ -1,0 +1,13 @@
+{
+  "name": "sub2api-oai-basispoints",
+  "version": "0.1.3",
+  "private": true,
+  "scripts": {
+    "test": "node --test tests/ui.test.cjs",
+    "verify-package": "node tests/verify-package.cjs",
+    "test:browser": "node --test tests/ui.browser.cjs"
+  },
+  "devDependencies": {
+    "playwright": "^1.58.2"
+  }
+}
