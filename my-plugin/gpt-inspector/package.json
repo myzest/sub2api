@@ -1,0 +1,7 @@
+{
+  "name": "sub2api-gpt-inspector-ui-tests",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": { "test": "node --test tests/ui.test.cjs" },
+  "devDependencies": { "playwright": "1.60.0" }
+}

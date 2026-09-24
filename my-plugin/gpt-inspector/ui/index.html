@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>GPT Inspector · 账号智力测试</title>
+  <link rel="stylesheet" href="assets/styles.css">
+  <script src="assets/bridge-v1.js" defer></script>
+  <script src="assets/preview.js" defer></script>
+  <script src="assets/app.js" defer></script>
+</head>
+<body>
+  <header class="app-header">
+    <div><div class="eyebrow">GPT INSPECTOR</div><h1>账号智力测试</h1></div>
+    <span class="pill">原始结果 · 自行判断</span>
+  </header>
+  <div id="notice" class="notice" role="status" aria-live="polite" hidden></div>
+  <div id="error" class="notice error" role="alert" hidden></div>
+  <section id="activity" class="activity" aria-live="polite" hidden>
+    <div class="row"><strong id="activity-title"></strong><button id="stop" class="danger quiet" type="button">停止测试</button></div>
+    <progress id="progress" max="1" value="0"></progress><p id="activity-detail" class="muted"></p>
+  </section>
+  <nav class="tabs" aria-label="插件页面">
+    <button id="new-tab" class="tab active" aria-pressed="true" type="button">新建测试</button>
+    <button id="results-tab" class="tab" aria-pressed="false" type="button">结果与存储 <span id="result-count">0</span></button>
+  </nav>
+  <main>
+    <section id="new-panel">
+      <form id="test-form">
+        <div class="form-heading"><h2>选择测试对象</h2><button id="refresh-accounts" class="quiet" type="button">刷新账号</button></div>
+        <label for="account">GPT 账号</label>
+        <select id="account" required><option value="">请选择账号</option></select>
+        <p class="muted small">仅显示现有 OpenAI OAuth 账号。暂停调度的账号暂不可测试。</p>
+        <div class="form-grid">
+          <div><div class="label-row"><label for="model">测试模型</label><button id="retry-models" class="link" type="button" hidden>重新获取</button></div><select id="model" required disabled><option value="">请选择模型</option></select></div>
+          <div><label for="effort">推理强度</label><select id="effort" required disabled><option value="">请选择推理强度</option></select></div>
+        </div>
+        <p id="model-note" class="muted small">选择账号后获取其模型和 Codex 推理档位，不预选模型或档位。</p>
+        <h2 class="section-gap">选择题目</h2><div id="prompts" class="prompt-grid"></div>
+        <div class="submit-row">
+          <div class="rounds"><label for="rounds">每题重复轮数</label><input id="rounds" type="number" min="1" max="20" step="1" value="1" required></div>
+          <div class="run-summary"><strong id="request-count">请选择题目</strong><span class="muted small">逐条执行，每条使用全新会话，不提供联网工具</span></div>
+          <button id="start" class="primary" type="button" disabled>开始测试</button>
+        </div>
+        <p class="footnote">关闭弹窗后继续运行。每个账号仅保留最新批次；新批次结束后替换上次结果。</p>
+      </form>
+    </section>
+    <section id="results-panel" hidden>
+      <div class="storage-bar">
+        <div><span class="muted small">测试数据用量</span><strong id="storage-total">0 B</strong><span id="storage-detail" class="muted small">0 个账号 · 0 条结果</span></div>
+        <button id="clear-all" class="danger quiet" type="button">清空全部结果</button>
+      </div>
+      <p class="muted small">用量为服务器实际保存的数据字节数，包含当前任务、索引和压缩后的回答。</p>
+      <div class="result-toolbar">
+        <select id="result-account" aria-label="查看结果的账号"><option value="">请选择结果账号</option></select>
+        <button id="refresh-results" class="quiet" type="button">刷新结果</button>
+        <button id="clear-account" class="danger quiet" type="button" disabled>清理此账号</button>
+      </div>
+      <div id="empty" class="empty"><span class="empty-icon">◎</span><h2>还没有测试结果</h2><p>选择账号和题目开始测试，回答会保存在这里。</p></div>
+      <div id="result-layout" class="result-layout" hidden>
+        <aside><label for="batch">测试批次</label><select id="batch"></select><div id="items" class="items" role="list"></div></aside>
+        <article id="answer-panel">
+          <div id="batch-info" class="muted small"></div><h2 id="answer-title">选择一条结果</h2><div id="answer-meta" class="muted small"></div>
+          <p id="answer-error" class="notice error" hidden></p>
+          <div class="answer-actions"><button id="show-preview" class="quiet" type="button" hidden>播放动画</button><button id="show-source" class="quiet" type="button" hidden>原始 HTML</button></div>
+          <div id="preview" hidden></div><pre id="answer-text" tabindex="0"></pre>
+          <details id="reasoning-section" hidden><summary>模型返回的推理摘要</summary><pre id="answer-reasoning"></pre></details>
+          <details id="prompt-section" hidden><summary>本次提示词</summary><pre id="answer-prompt"></pre></details>
+          <details id="usage-section" hidden><summary>请求信息</summary><pre id="answer-usage"></pre></details>
+        </article>
+      </div>
+    </section>
+  </main>
+  <dialog id="confirm-dialog">
+    <h2 id="confirm-title">确认清理</h2><p id="confirm-body"></p>
+    <div class="dialog-actions"><button id="confirm-cancel" class="quiet" type="button">取消</button><button id="confirm-ok" class="danger solid" type="button">确认清理</button></div>
+  </dialog>
+</body>
+</html>
