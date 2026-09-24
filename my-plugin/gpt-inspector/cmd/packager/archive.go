@@ -54,7 +54,7 @@ type signature struct {
 
 func writePackage(path string, files map[string][]byte, runtimes map[string]runtimeEntry, key ed25519.PrivateKey, publisher string) error {
 	m := manifest{SchemaVersion: 1, ID: inspector.PluginID, Name: "GPT Inspector · 账号智力测试", Version: inspector.Version,
-		Description: "指定 GPT OAuth 账号，串行运行独立会话，查看原始文字与鹈鹕动画；同时承担 OpenAI OAuth 出站转发。", Author: "Local Sub2API Plugins",
+		Description: "多账号并行测试所选题目，支持自选超时、独立会话和分账号停止，查看原始文字与鹈鹕动画；同时承担 OpenAI OAuth 出站转发。", Author: "Local Sub2API Plugins",
 		Requires:     requirements{Sub2API: ">=0.2.8 <0.3.0", Recommended: "0.2.8", Tested: []string{}, PluginProtocol: 1, TransportAPI: 1, UIBridge: 1},
 		Capabilities: []capability{{ID: inspector.Capability, Platform: "openai", AccountType: "oauth"}}, Runtimes: runtimes, UI: uiEntry{Entrypoint: "ui/index.html"}, Files: map[string]string{}}
 	archiveFiles := map[string][]byte{}

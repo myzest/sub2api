@@ -81,7 +81,7 @@ func TestRealPluginProcessAndHostBroker(t *testing.T) {
 		}
 		var x Snapshot
 		_ = json.Unmarshal([]byte(r.StatusJson), &x)
-		return x.Ready && len(x.Accounts) == 2
+		return x.Ready && len(x.Accounts) == 3
 	})
 	validation, err := api.ValidateConfig(ctx, &pluginv1.ValidateConfigRequest{ConfigJson: []byte(`{}`)})
 	if err != nil || !validation.Valid {

@@ -50,6 +50,13 @@ func parseConfig(raw []byte) (Config, error) {
 		return cfg, errors.New("结果位置无效")
 	}
 	if c.Action == "start" {
+		if c.TimeoutMinutes == nil {
+			minutes := defaultTimeoutMinutes
+			c.TimeoutMinutes = &minutes
+		}
+		if *c.TimeoutMinutes < 0 || *c.TimeoutMinutes > maxTimeoutMinutes {
+			return cfg, errors.New("单题超时必须在 1–120 分钟之间，0 表示不限时")
+		}
 		if c.AccountID <= 0 || c.Model == "" || len(c.Model) > 200 || c.Effort == "" || len(c.Effort) > 32 {
 			return cfg, errors.New("必须选择账号、模型和推理强度")
 		}

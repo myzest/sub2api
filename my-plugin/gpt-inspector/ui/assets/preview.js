@@ -3,7 +3,9 @@
   const policy = "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; connect-src 'none'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'";
   function htmlFromAnswer(text) {
     const trimmed = text.trim();
-    const fence = trimmed.match(/^```(?:html)?\s*\n([\s\S]*?)\n```\s*$/i);
+    // Models sometimes wrap HTML in prose or leave the closing fence missing
+    // after an interruption. Only the preview removes that presentation layer.
+    const fence = trimmed.match(/```(?:html|svg|xml)?[ \t]*\r?\n([\s\S]*?)(?:\r?\n[ \t]*```|$)/i);
     return fence ? fence[1] : text;
   }
   window.InspectorPreview = {

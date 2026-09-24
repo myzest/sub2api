@@ -10,7 +10,10 @@
   const cache = new Map();
   const bytes = n => n < 1024 ? `${n} B` : n < 1024**2 ? `${(n/1024).toFixed(1)} KiB` : `${(n/1024**2).toFixed(2)} MiB`;
   const date = text => text ? new Date(text).toLocaleString('zh-CN', {hour12:false}) : '';
+  const timeoutLabel = minutes => minutes === 0 ? '单题不限时' : `单题超时 ${minutes} 分钟`;
+  const elapsed = started => { const seconds = Math.max(0, Math.floor((Date.now()-new Date(started).getTime())/1000)); return `${Math.floor(seconds/60)}分${seconds%60}秒`; };
   const text = (id, value) => { $(id).textContent = value ?? ''; };
+  const activeForAccount = id => snapshot?.active?.find(b => b.account_id === id);
   function option(value, label) { const o = document.createElement('option'); o.value = value; o.textContent = label; return o; }
   function error(message = '') { commandError = message; renderMessages(); }
   function notify(message) { text('notice', message); $('notice').hidden = !message; }
@@ -21,14 +24,19 @@
   function chosenPrompts() { return [...document.querySelectorAll('#prompts input:checked')].map(input => input.value); }
   function enableControls() {
     const available = !!snapshot?.ready && !snapshot.busy && operations === 0;
-    const rounds = Number($('rounds').value), count = chosenPrompts().length;
-    $('start').disabled = !available || !!snapshot?.active || !$('account').value || !$('model').value || !$('effort').value || count === 0 || !Number.isInteger(rounds) || rounds < 1 || rounds > 20;
+    const rounds = Number($('rounds').value), count = chosenPrompts().length, timeout = Number($('timeout').value);
+    const accountBusy = !!activeForAccount(Number($('account').value));
+    $('start').disabled = !available || accountBusy || !$('account').value || !$('model').value || !$('effort').value || count === 0 || !Number.isInteger(rounds) || rounds < 1 || rounds > 20 || !Number.isInteger(timeout) || timeout < 0 || timeout > 120;
+    text('start', accountBusy ? '该账号测试中' : '开始测试');
     $('refresh-accounts').disabled = !available; $('retry-models').disabled = !available;
-    $('stop').disabled = !available || !snapshot?.active || snapshot.active.state === 'stopping';
+    for (const button of document.querySelectorAll('[data-stop-batch]')) {
+      const b = snapshot?.active?.find(b => b.id === button.dataset.stopBatch);
+      button.disabled = !available || !b || b.state === 'stopping';
+    }
     $('clear-all').disabled = !snapshot || !!snapshot.busy || operations > 0;
     $('clear-account').disabled = !available || !$('result-account').value;
     $('refresh-results').disabled = !available || !$('result-account').value;
-    text('request-count', count && Number.isInteger(rounds) && rounds > 0 ? `${count} 道题 × ${rounds} 轮 = ${count*rounds} 次请求` : '请选择题目');
+    text('request-count', count && Number.isInteger(rounds) && rounds > 0 ? `${count} 道题 × ${rounds} 轮 = ${count*rounds} 次请求 · 最多 ${count} 题同时运行` : '请选择题目');
   }
   function command(action, args = {}) {
     operations++; enableControls();
@@ -103,13 +111,22 @@
     } finally { enableControls(); }
   }
   function renderActivity() {
-    const b = snapshot?.active; $('activity').hidden = !b;
-    if (!b) return;
-    const done = b.items.filter(i => !['queued','running'].includes(i.state)).length;
-    const running = b.items.find(i => i.state === 'running');
-    text('activity-title', `${b.account_name} · ${stateNames[b.state] || b.state}`);
-    $('progress').max = b.items.length; $('progress').value = done;
-    text('activity-detail', `已处理 ${done} / ${b.items.length}${running ? ` · 第 ${running.round} 轮 · ${promptTitle(running.prompt_id)}` : ''} · 可关闭弹窗，后台会继续运行`);
+    const batches = snapshot?.active || []; $('activity').hidden = batches.length === 0;
+    text('activity-title', `${batches.length} 个账号正在测试`);
+    $('active-tasks').replaceChildren(...batches.map(b => {
+      const card = document.createElement('div'); card.className = 'task-card'; card.dataset.accountId = b.account_id;
+      const heading = document.createElement('div'); heading.className = 'row';
+      const title = document.createElement('strong'); title.textContent = `${b.account_name} · #${b.account_id} · ${stateNames[b.state] || b.state}`;
+      const stop = document.createElement('button'); stop.type = 'button'; stop.className = 'danger quiet'; stop.dataset.stopBatch = b.id; stop.textContent = '停止此账号';
+      stop.addEventListener('click', action(async () => { await command('stop',{account_id:b.account_id,batch_id:b.id}); notify(`已请求停止 ${b.account_name}，已完成的回答会保留。`); }));
+      heading.append(title,stop);
+      const progress = document.createElement('progress'); progress.max = b.items.length; progress.value = b.items.filter(i => !['queued','running'].includes(i.state)).length;
+      const running = b.items.filter(i => i.state === 'running');
+      const details = running.map(item => `${promptTitle(item.prompt_id)} 第 ${item.round} 轮（已用 ${elapsed(item.started_at)}${item.attempt > 1 ? `，第 ${item.attempt} 次尝试` : ''}）`).join('；');
+      const description = document.createElement('p'); description.className = 'muted task-detail';
+      description.textContent = `${b.model} · ${b.effort} · ${timeoutLabel(b.timeout_minutes)} · 已处理 ${progress.value} / ${b.items.length} · 同时运行 ${running.length} 题${details ? ` · ${details}` : ''}`;
+      card.append(heading,progress,description); return card;
+    }));
   }
   function resetRuntime() {
     resetModels(); requestGeneration++; cache.clear(); record = null; clearAnswer(); renderRecord();
@@ -124,12 +141,19 @@
       else if (!snapshot.ready) notify('账号与结果存储服务尚未就绪。');
       else if (previous?.busy || !previous?.ready) notify('');
       renderMessages(); renderPrompts(); renderAccounts(); renderActivity(); enableControls();
-      if (record && snapshot.active?.account_id === record.account_id) { record.pending = snapshot.active; renderRecord(false); }
-      if (previous?.active && !snapshot.active) {
-        notify('任务已结束，已保存的回答可在“结果与存储”查看。');
-        if (Number($('result-account').value) === previous.active.account_id && snapshot.ready && !snapshot.busy) await loadRecord();
+      const current = record && activeForAccount(record.account_id);
+      if (current) { record.pending = current; renderRecord(false); }
+      const finished = (previous?.active || []).filter(b => !snapshot.active.some(next => next.id === b.id));
+      if (finished.length) {
+        notify(`${finished.map(b => b.account_name).join('、')} 的任务已结束，已保存的回答可在“结果与存储”查看。`);
       }
-      if (previous?.busy && !snapshot.busy && !snapshot.active && Number($('result-account').value) && snapshot.ready) await loadRecord();
+      const id = Number($('result-account').value);
+      const stored = snapshot.stored.find(a => a.account_id === id);
+      const loaded = record?.pending || record?.latest;
+      // A short batch can start and finish between polls. Compare the stored
+      // batch as well, rather than depending on observing it while active.
+      const changed = stored && (record?.account_id !== id || stored.batch_id !== loaded?.id || stored.state !== loaded?.state);
+      if (id && snapshot.ready && !snapshot.busy && (changed || previous?.busy)) await loadRecord();
     } catch (e) { if (!closed) error(e.message); }
     finally { if (!closed) timer = setTimeout(poll, 2500); }
   }
@@ -156,12 +180,12 @@
     $('batch').replaceChildren(...batches.map(b => option(b.id, `${b === record.pending ? '当前测试' : '最新结果'} · ${date(b.created_at)}`)));
     $('batch').value = selectedBatch;
     const b = currentBatch();
-    text('batch-info', `${b.model} · ${b.effort} · ${date(b.created_at)} · ${stateNames[b.state] || b.state}`);
+    text('batch-info', `${b.model} · ${b.effort}${b.timeout_minutes == null ? '' : ` · ${timeoutLabel(b.timeout_minutes)}`} · ${date(b.created_at)} · ${stateNames[b.state] || b.state}`);
     const children = b.items.map((item, index) => {
       const button = document.createElement('button'); button.type = 'button'; button.className = 'item'; button.dataset.state = item.state;
       button.setAttribute('role','listitem'); button.classList.toggle('active', index === selectedItem);
       const title = document.createElement('span'); title.textContent = `第 ${item.round} 轮 · ${promptTitle(item.prompt_id)}`;
-      const status = document.createElement('span'); status.className = 'state'; status.textContent = `${stateNames[item.state] || item.state}${item.duration_ms ? ` · ${(item.duration_ms/1000).toFixed(1)}s` : ''}`;
+      const status = document.createElement('span'); status.className = 'state'; status.textContent = `${stateNames[item.state] || item.state}${item.attempt > 1 ? ` · 尝试 ${item.attempt} 次` : ''}${item.duration_ms ? ` · ${(item.duration_ms/1000).toFixed(1)}s` : ''}`;
       button.append(title,status); button.addEventListener('click', action(() => showItem(index))); return button;
     });
     $('items').replaceChildren(...children);
@@ -175,7 +199,7 @@
   function clearAnswer() {
     answer = null; loadingResult = ''; preview.clear($('preview'));
     text('answer-text',''); $('answer-text').hidden = false;
-    for (const id of ['answer-error','show-preview','show-source','reasoning-section','prompt-section','usage-section']) $(id).hidden = true;
+    for (const id of ['answer-error','answer-retry','show-preview','show-source','reasoning-section','prompt-section','usage-section']) $(id).hidden = true;
   }
   async function showItem(index) {
     const b = currentBatch(); if (!b?.items[index]) return;
@@ -204,18 +228,20 @@
     answer = data;
     text('answer-text',answer.text || '没有文本回答');
     text('answer-error',answer.error || item.error); $('answer-error').hidden = !(answer.error || item.error);
+    const attempts = answer.attempts || [];
+    text('answer-retry', `本题共尝试 ${attempts.length} 次（自动重试 ${Math.max(0,attempts.length-1)} 次）。${answer.error ? '最后一次未完成，' : '已收到完整回答，'}每次尝试的耗时和中断原因可在“请求信息”查看。`); $('answer-retry').hidden = attempts.length < 2;
     text('answer-reasoning',answer.reasoning); $('reasoning-section').hidden = !answer.reasoning;
     text('answer-prompt',answer.prompt.text); $('prompt-section').hidden = false;
-    text('answer-usage',JSON.stringify({model:b.model, reasoning_effort:b.effort, returned_model:answer.returned_model, response_id:answer.response_id, session_id:item.session_id, usage:answer.usage},null,2)); $('usage-section').hidden = false;
+    text('answer-usage',JSON.stringify({model:b.model, reasoning_effort:b.effort, timeout_minutes:b.timeout_minutes, returned_model:answer.returned_model, response_id:answer.response_id, session_id:answer.session_id || item.session_id, error_code:answer.error_code, usage:answer.usage, attempts:answer.attempts},null,2)); $('usage-section').hidden = false;
     if (answer.prompt.kind === 'html') {
       $('show-preview').hidden = false; $('show-source').hidden = false;
-      if (/<(?:html|svg|!doctype)/i.test(answer.text)) showPreview();
+      if (answer.text) showPreview();
     }
   }
   function showPreview() { if (!answer) return; preview.show($('preview'),answer.text); $('answer-text').hidden = true; }
   function confirmClear(all) {
     text('confirm-title', all ? '清空全部测试结果？' : '清理此账号结果？');
-    text('confirm-body', all ? '将停止当前测试并清空本插件所有账号的回答、动画和结果索引。账号与正常转发保持可用。' : '将停止此账号的当前测试，并删除其已保存的全部测试结果。');
+    text('confirm-body', all ? '将停止所有账号的测试并清空本插件的回答、动画和结果索引。账号与正常转发保持可用。' : '将停止此账号的当前测试，并删除其已保存的全部测试结果。其他账号继续运行。');
     return new Promise(resolve => {
       const dialog = $('confirm-dialog');
       const done = value => { dialog.close(); $('confirm-ok').onclick = null; $('confirm-cancel').onclick = null; dialog.oncancel = null; resolve(value); };
@@ -240,6 +266,7 @@
     enableControls();
   });
   $('effort').addEventListener('change',enableControls); $('rounds').addEventListener('input',enableControls);
+  $('timeout').addEventListener('change',enableControls);
   $('refresh-accounts').addEventListener('click',action(async () => { const accounts = await command('accounts'); snapshot.accounts = accounts; renderAccounts(); notify('账号列表已更新。'); }));
   // The host sandbox has no allow-forms; native submission is blocked before
   // the submit event. Use the explicit Bridge action even for keyboard users.
@@ -247,21 +274,21 @@
   $('start').addEventListener('click',action(async event => {
     event.preventDefault(); if ($('start').disabled) return;
     const id = Number($('account').value);
-    await command('start',{account_id:id,model:$('model').value,effort:$('effort').value,prompts:chosenPrompts(),rounds:Number($('rounds').value)});
+    await command('start',{account_id:id,model:$('model').value,effort:$('effort').value,prompts:chosenPrompts(),rounds:Number($('rounds').value),timeout_minutes:Number($('timeout').value)});
     // A fresh form always requires a deliberate model and effort selection.
     $('model').value = ''; $('effort').replaceChildren(option('','请选择推理强度')); $('effort').disabled = true;
-    notify('测试已在后台开始。可以关闭弹窗，稍后查看结果。'); enableControls();
+    notify('测试已在后台开始。可继续添加其他账号，也可以关闭弹窗，稍后查看结果。'); enableControls();
   }));
-  $('stop').addEventListener('click',action(async () => { await command('stop'); notify('已请求停止，已完成的回答会保留。'); }));
   $('new-tab').addEventListener('click',() => { tab('new'); preview.clear($('preview')); $('answer-text').hidden = false; });
   $('results-tab').addEventListener('click',action(async () => {
     tab('results');
     if (!$('result-account').value && snapshot?.stored?.length) {
-      const id = snapshot.active?.account_id || Number($('account').value) || snapshot.stored[0].account_id;
+      const id = Number($('account').value) || snapshot.active?.[0]?.account_id || snapshot.stored[0].account_id;
       $('result-account').value = String(id);
       if (!$('result-account').value) $('result-account').value = String(snapshot.stored[0].account_id);
-      await loadRecord();
     }
+    if ($('result-account').value && snapshot?.ready && !snapshot.busy) await loadRecord();
+    if (answer?.prompt.kind === 'html' && answer.text) showPreview();
     enableControls();
   }));
   $('result-account').addEventListener('change',action(async () => { record = null; selectedBatch = ''; selectedItem = -1; clearAnswer(); renderRecord(); enableControls(); await loadRecord(); }));

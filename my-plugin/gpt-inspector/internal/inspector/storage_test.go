@@ -83,21 +83,26 @@ func TestKVListingAndClearBeyondOnePage(t *testing.T) {
 }
 func TestRecoveryRetainsInterruptedResultsAndDropsOrphans(t *testing.T) {
 	s, h := testServer(t, nil)
-	oldID, newIDValue := newID(), newID()
-	r := Record{AccountID: 7, Name: "fixture", Latest: &Batch{ID: oldID, State: "completed"}, Pending: &Batch{ID: newIDValue, State: "running", Items: []Item{{PromptID: "iphone", State: "completed", Parts: 1}, {PromptID: "japan_pm", State: "running"}}}}
-	h.values[recordKey(7)], _ = json.Marshal(r)
-	h.values[resultKey(7, oldID, 0, 0)] = []byte("old result")
-	h.values[resultKey(7, newIDValue, 0, 0)] = []byte("committed result")
-	h.values[resultKey(7, newIDValue, 1, 0)] = []byte("uncommitted partial write")
+	batchIDs := map[int64]string{7: newID(), 9: newID()}
+	for id, batch := range batchIDs {
+		oldID := newID()
+		r := Record{AccountID: id, Name: "fixture", Latest: &Batch{ID: oldID, State: "completed"}, Pending: &Batch{ID: batch, State: "running", Items: []Item{{PromptID: "iphone", State: "completed", Parts: 1}, {PromptID: "japan_pm", State: "running"}}}}
+		h.values[recordKey(id)], _ = json.Marshal(r)
+		h.values[resultKey(id, oldID, 0, 0)] = []byte("old result")
+		h.values[resultKey(id, batch, 0, 0)] = []byte("committed result")
+		h.values[resultKey(id, batch, 1, 0)] = []byte("uncommitted partial write")
+	}
 	if err := s.recover(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	rr := s.records[7]
-	if rr.Latest.State != "interrupted" || rr.Pending != nil || rr.Latest.Items[1].State != "interrupted" {
-		t.Fatal(rr)
+	for id, batch := range batchIDs {
+		rr := s.records[id]
+		if rr.Latest.State != "interrupted" || rr.Pending != nil || rr.Latest.Items[1].State != "interrupted" || h.values[resultKey(id, batch, 0, 0)] == nil {
+			t.Fatal("recovery mixed accounts or lost their committed answers", rr)
+		}
 	}
-	if len(h.values) != 2 || h.values[resultKey(7, newIDValue, 0, 0)] == nil {
-		t.Fatal("recovery lost committed answer or kept orphans")
+	if len(h.values) != 4 {
+		t.Fatal("recovery kept orphans")
 	}
 }
 func TestClearTombstoneFinishesAfterRestart(t *testing.T) {
@@ -131,7 +136,7 @@ func TestFailedFinalCommitCannotBeOverwrittenByNewBatch(t *testing.T) {
 	s, h := testServer(t, func(w http.ResponseWriter, r *http.Request) { completed(w, "saved answer") })
 	old := testCommand(s, "start")
 	invoke(t, s, old)
-	waitFor(t, func() bool { return getSnapshot(s).Active == nil })
+	waitFor(t, func() bool { return len(getSnapshot(s).Active) == 0 })
 	latest := testCommand(s, "start")
 	h.mu.Lock()
 	h.beforeSet = func(req *pluginv1.KVSetRequest) error {
@@ -143,7 +148,7 @@ func TestFailedFinalCommitCannotBeOverwrittenByNewBatch(t *testing.T) {
 	}
 	h.mu.Unlock()
 	invoke(t, s, latest)
-	waitFor(t, func() bool { return getSnapshot(s).Active == nil })
+	waitFor(t, func() bool { return len(getSnapshot(s).Active) == 0 })
 	if !strings.Contains(getSnapshot(s).Error, "提交最新批次失败") {
 		t.Fatal("storage failure was hidden")
 	}
@@ -153,7 +158,7 @@ func TestFailedFinalCommitCannotBeOverwrittenByNewBatch(t *testing.T) {
 	next := testCommand(s, "start")
 	raw, _ := json.Marshal(Config{Command: &next})
 	reply, err := s.TestConfig(context.Background(), &pluginv1.TestConfigRequest{ConfigJson: raw})
-	waitFor(t, func() bool { return getSnapshot(s).Active == nil })
+	waitFor(t, func() bool { return len(getSnapshot(s).Active) == 0 })
 	if err != nil || reply.Success {
 		t.Fatal("new batch overwrote the uncommitted result", reply, err)
 	}

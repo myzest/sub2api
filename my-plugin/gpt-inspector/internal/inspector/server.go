@@ -19,6 +19,11 @@ type commandReply struct {
 	value       any
 }
 
+type runningBatch struct {
+	batch  *Batch
+	cancel context.CancelFunc
+}
+
 type Server struct {
 	pluginv1.UnimplementedTransportPluginServer
 	broker       *hcplugin.GRPCBroker
@@ -33,8 +38,7 @@ type Server struct {
 	accounts     []Account
 	catalogs     map[int64][]Model
 	records      map[int64]*Record
-	active       *Batch
-	cancel       context.CancelFunc
+	jobs         map[int64]*runningBatch
 	store        *store
 	seen         map[string]commandReply
 	revision     uint64
@@ -45,7 +49,7 @@ type Server struct {
 }
 
 func New() *Server {
-	s := &Server{instance: newID(), catalogs: map[int64][]Model{}, records: map[int64]*Record{}, seen: map[string]commandReply{},
+	s := &Server{instance: newID(), catalogs: map[int64][]Model{}, records: map[int64]*Record{}, jobs: map[int64]*runningBatch{}, seen: map[string]commandReply{},
 		modelsURL: "https://chatgpt.com/backend-api/codex/models", responsesURL: "https://chatgpt.com/backend-api/codex/responses"}
 	s.publishLocked()
 	return s
@@ -186,11 +190,21 @@ func (s *Server) dispatch(ctx context.Context, c Command) (any, error) {
 	case "start":
 		value, err = s.start(ctx, c)
 	case "stop":
+		// Keep old saved stop configs valid during upgrade, but never dispatch
+		// an unscoped stop now that multiple accounts can run at once.
+		if c.AccountID <= 0 || !uuidPattern.MatchString(c.BatchID) {
+			err = errors.New("请选择要停止的账号批次，请刷新任务列表后重试")
+			break
+		}
 		s.mu.Lock()
-		if s.active != nil {
-			s.active.State = "stopping"
-			s.cancel()
-			s.publishLocked()
+		if job := s.jobs[c.AccountID]; job != nil {
+			if job.batch.ID != c.BatchID {
+				err = errors.New("该账号的运行批次已变化，请刷新后选择要停止的任务")
+			} else {
+				job.batch.State = "stopping"
+				job.cancel()
+				s.publishLocked()
+			}
 		}
 		s.mu.Unlock()
 		value = map[string]bool{"stopping": true}

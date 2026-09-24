@@ -17,8 +17,9 @@
   <div id="notice" class="notice" role="status" aria-live="polite" hidden></div>
   <div id="error" class="notice error" role="alert" hidden></div>
   <section id="activity" class="activity" aria-live="polite" hidden>
-    <div class="row"><strong id="activity-title"></strong><button id="stop" class="danger quiet" type="button">停止测试</button></div>
-    <progress id="progress" max="1" value="0"></progress><p id="activity-detail" class="muted"></p>
+    <strong id="activity-title"></strong>
+    <p class="muted small">可以继续为其他账号添加测试。各账号独立运行，可分别停止。</p>
+    <div id="active-tasks"></div>
   </section>
   <nav class="tabs" aria-label="插件页面">
     <button id="new-tab" class="tab active" aria-pressed="true" type="button">新建测试</button>
@@ -39,10 +40,12 @@
         <h2 class="section-gap">选择题目</h2><div id="prompts" class="prompt-grid"></div>
         <div class="submit-row">
           <div class="rounds"><label for="rounds">每题重复轮数</label><input id="rounds" type="number" min="1" max="20" step="1" value="1" required></div>
-          <div class="run-summary"><strong id="request-count">请选择题目</strong><span class="muted small">逐条执行，每条使用全新会话，不提供联网工具</span></div>
+          <div class="rounds"><label for="timeout">单题超时</label><select id="timeout"><option value="15">15 分钟</option><option value="30" selected>30 分钟</option><option value="60">60 分钟</option><option value="120">120 分钟</option><option value="0">不限时</option></select></div>
+          <div class="run-summary"><strong id="request-count">请选择题目</strong><span class="muted small">所选题目同时运行，每题各轮依次执行；每次都是全新会话，不提供联网工具</span></div>
           <button id="start" class="primary" type="button" disabled>开始测试</button>
         </div>
         <p class="footnote">关闭弹窗后继续运行。每个账号仅保留最新批次；新批次结束后替换上次结果。</p>
+        <p class="footnote">未收到回答或推理摘要时遇到临时断流，最多自动重试 2 次，共用单题时限；上方请求数不含重试。每次尝试记录在结果的“请求信息”中。</p>
       </form>
     </section>
     <section id="results-panel" hidden>
@@ -62,6 +65,7 @@
         <article id="answer-panel">
           <div id="batch-info" class="muted small"></div><h2 id="answer-title">选择一条结果</h2><div id="answer-meta" class="muted small"></div>
           <p id="answer-error" class="notice error" hidden></p>
+          <p id="answer-retry" class="notice" hidden></p>
           <div class="answer-actions"><button id="show-preview" class="quiet" type="button" hidden>播放动画</button><button id="show-source" class="quiet" type="button" hidden>原始 HTML</button></div>
           <div id="preview" hidden></div><pre id="answer-text" tabindex="0"></pre>
           <details id="reasoning-section" hidden><summary>模型返回的推理摘要</summary><pre id="answer-reasoning"></pre></details>

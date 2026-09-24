@@ -157,10 +157,76 @@ func requestBody(selection Selection, prompt Prompt, sessionID string) []byte {
 	})
 	return body
 }
-func (s *Server) ask(ctx context.Context, selection Selection, prompt Prompt, sessionID string) Answer {
-	a := Answer{Prompt: prompt}
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
-	defer cancel()
+func testRequestContext(parent context.Context, minutes int) (context.Context, context.CancelFunc) {
+	if minutes == 0 {
+		return context.WithCancel(parent)
+	}
+	return context.WithTimeout(parent, time.Duration(minutes)*time.Minute)
+}
+
+const maxRequestAttempts = 3
+
+func retryEmptyResponse(a Answer) bool {
+	if a.Text != "" || a.Reasoning != "" {
+		return false
+	}
+	return a.ErrorCode == "transport_error" || a.ErrorCode == "stream_interrupted" || a.ErrorCode == "stream_incomplete"
+}
+
+func (s *Server) ask(parent context.Context, selection Selection, prompt Prompt, sessionID string, onRetry func(int, string) error) (a Answer) {
+	a.Prompt = prompt
+	minutes := defaultTimeoutMinutes
+	if selection.TimeoutMinutes != nil {
+		minutes = *selection.TimeoutMinutes
+	}
+	ctx, cancel := testRequestContext(parent, minutes)
+	defer func() {
+		if parent.Err() != nil {
+			a.ErrorCode = "canceled"
+			a.Error = "测试已停止，已保留接收到的部分内容"
+		} else if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			a.ErrorCode = "timeout"
+			a.Error = fmt.Sprintf("达到单题 %d 分钟超时，已保留接收到的部分内容；可增加时长或选择不限时", minutes)
+		}
+		cancel()
+	}()
+	var attempts []RequestAttempt
+	for number := 1; number <= maxRequestAttempts; number++ {
+		if number > 1 {
+			// All attempts share the original deadline. Stopping or clearing also
+			// interrupts this backoff, so neither can start a late request.
+			timer := time.NewTimer(time.Duration(number-1) * time.Second)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return a
+			case <-timer.C:
+			}
+			if ctx.Err() != nil {
+				return a
+			}
+			sessionID = newID()
+			if onRetry != nil {
+				if err := onRetry(number, sessionID); err != nil {
+					a.ErrorCode, a.Error = "retry_progress_failed", err.Error()
+					return a
+				}
+			}
+		}
+		started := time.Now()
+		a = s.askOnce(ctx, selection, prompt, sessionID)
+		a.SessionID = sessionID
+		attempts = append(attempts, RequestAttempt{SessionID: sessionID, ResponseID: a.ResponseID, ReturnedModel: a.ReturnedModel, Usage: a.Usage, DurationMS: time.Since(started).Milliseconds(), Error: a.Error, ErrorCode: a.ErrorCode})
+		a.Attempts = attempts
+		if ctx.Err() != nil || !retryEmptyResponse(a) {
+			return a
+		}
+	}
+	return a
+}
+
+func (s *Server) askOnce(ctx context.Context, selection Selection, prompt Prompt, sessionID string) (a Answer) {
+	a.Prompt = prompt
 	i, err := s.identity(ctx, selection.AccountID)
 	if err != nil {
 		a.Error = err.Error()
@@ -188,6 +254,7 @@ func (s *Server) ask(ctx context.Context, selection Selection, prompt Prompt, se
 	}
 	resp, err := t.RoundTrip(req)
 	if err != nil {
+		a.ErrorCode = "transport_error"
 		a.Error = networkError(ctx, err)
 		return a
 	}
@@ -195,12 +262,10 @@ func (s *Server) ask(ctx context.Context, selection Selection, prompt Prompt, se
 	if resp.StatusCode != http.StatusOK {
 		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 8192))
 		a.Error = upstreamError(resp.StatusCode, raw, i).Error()
+		a.ErrorCode = "upstream_http"
 		return a
 	}
 	a = parseResponse(resp.Body, resp.Header.Get("Content-Type"), prompt)
-	if ctx.Err() != nil {
-		a.Error = "测试已取消或达到单题 5 分钟超时"
-	}
 	if a.Error != "" {
 		a.Error = redact(a.Error, i)
 	}

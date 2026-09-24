@@ -5,7 +5,8 @@ const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 
 const root = path.resolve(__dirname,'..');
-const artifact = path.resolve(process.argv[2] || path.join(root,'dist/gpt-inspector-0.1.0.s2plugin'));
+const version = JSON.parse(fs.readFileSync(path.join(root,'package.json'),'utf8')).version;
+const artifact = path.resolve(process.argv[2] || path.join(root,`dist/gpt-inspector-${version}.s2plugin`));
 const read = name => execFileSync('unzip',['-p',artifact,name],{maxBuffer:64*1024*1024});
 const names = execFileSync('unzip',['-Z1',artifact],{encoding:'utf8'}).trim().split('\n');
 assert.equal(new Set(names).size,names.length,'duplicate archive paths');
@@ -20,6 +21,7 @@ const key = crypto.createPublicKey({format:'der',type:'spki',key:Buffer.concat([
 assert.equal(signature.algorithm,'ed25519');
 assert(crypto.verify(null,raw,key,Buffer.from(signature.signature,'base64')),'signature does not match installation public key');
 assert.equal(manifest.id,'local.sub2api.gpt-inspector');
+assert.equal(manifest.version,version);
 assert.equal(manifest.ui.entrypoint,'ui/index.html');
 assert.deepEqual(names.filter(n=>!['manifest.json','signature.json'].includes(n)).sort(),Object.keys(manifest.files).sort());
 for(const [name,expected] of Object.entries(manifest.files)) {

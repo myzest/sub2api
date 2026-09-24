@@ -4,9 +4,24 @@ import (
 	"bufio"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
+	"sort"
 	"strings"
 )
+
+const maxEventSize = 16 * 1024 * 1024
+
+type responseContent struct {
+	Type    string `json:"type"`
+	Text    string `json:"text"`
+	Refusal string `json:"refusal"`
+}
+type responseOutput struct {
+	Type    string            `json:"type"`
+	Content []responseContent `json:"content"`
+	Summary []responseContent `json:"summary"`
+}
 
 type responseEnvelope struct {
 	ID     string          `json:"id"`
@@ -16,22 +31,71 @@ type responseEnvelope struct {
 	Error  *struct {
 		Message string `json:"message"`
 	} `json:"error"`
-	IncompleteDetails json.RawMessage `json:"incomplete_details"`
-	Output            []struct {
-		Type    string `json:"type"`
-		Content []struct {
-			Type    string `json:"type"`
-			Text    string `json:"text"`
-			Refusal string `json:"refusal"`
-		} `json:"content"`
-		Summary []struct {
-			Text string `json:"text"`
-		} `json:"summary"`
-	} `json:"output"`
+	IncompleteDetails json.RawMessage  `json:"incomplete_details"`
+	Output            []responseOutput `json:"output"`
+}
+
+type outputPart struct {
+	output, index int
+	reasoning     bool
+}
+type streamedOutput struct {
+	parts map[outputPart]*strings.Builder
+	size  int
+}
+
+func (s *streamedOutput) write(key outputPart, text string, replace bool) {
+	part := s.parts[key]
+	if part == nil {
+		if text == "" {
+			return
+		}
+		part = &strings.Builder{}
+		s.parts[key] = part
+	}
+	if replace {
+		s.size -= part.Len()
+		part.Reset()
+	}
+	part.WriteString(text)
+	s.size += len(text)
+}
+func (s *streamedOutput) apply(a *Answer) {
+	keys := make([]outputPart, 0, len(s.parts))
+	for key := range s.parts {
+		keys = append(keys, key)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		if keys[i].output != keys[j].output {
+			return keys[i].output < keys[j].output
+		}
+		return keys[i].index < keys[j].index
+	})
+	var text, reasoning strings.Builder
+	for _, key := range keys {
+		if key.reasoning {
+			reasoning.WriteString(s.parts[key].String())
+		} else {
+			text.WriteString(s.parts[key].String())
+		}
+	}
+	a.Text, a.Reasoning = text.String(), reasoning.String()
+}
+
+func (r responseEnvelope) metadata(a *Answer) {
+	if r.ID != "" {
+		a.ResponseID = r.ID
+	}
+	if r.Model != "" {
+		a.ReturnedModel = r.Model
+	}
+	if len(r.Usage) > 0 {
+		a.Usage = r.Usage
+	}
 }
 
 func (r responseEnvelope) apply(a *Answer) {
-	a.ResponseID, a.ReturnedModel, a.Usage = r.ID, r.Model, r.Usage
+	r.metadata(a)
 	var text, reasoning strings.Builder
 	for _, output := range r.Output {
 		for _, c := range output.Content {
@@ -61,31 +125,51 @@ func (r responseEnvelope) apply(a *Answer) {
 	if r.Status == "failed" && a.Error == "" {
 		a.Error = "上游响应失败"
 	}
+	if a.Error != "" {
+		a.ErrorCode = "upstream_error"
+	}
+}
+
+func streamReadFailure(a *Answer, err error) {
+	if errors.Is(err, bufio.ErrTooLong) {
+		a.ErrorCode, a.Error = "event_too_large", "上游单条 SSE 事件超过 16 MiB 限制，已保留接收到的部分内容"
+		return
+	}
+	a.ErrorCode = "stream_interrupted"
+	a.Error = fmt.Sprintf("上游响应流读取中断（%v），未确认完成；已保留接收到的部分内容", err)
 }
 
 func parseResponse(reader io.Reader, contentType string, prompt Prompt) Answer {
 	a := Answer{Prompt: prompt}
 	if strings.Contains(contentType, "application/json") {
-		raw, err := io.ReadAll(io.LimitReader(reader, 16*1024*1024+1))
-		if err != nil || len(raw) > 16*1024*1024 {
-			a.Error = "读取上游 JSON 响应失败或响应过大"
+		raw, readErr := io.ReadAll(io.LimitReader(reader, maxEventSize+1))
+		if len(raw) > maxEventSize {
+			a.ErrorCode, a.Error = "event_too_large", "上游 JSON 响应超过 16 MiB 限制"
 			return a
 		}
 		var r responseEnvelope
 		if err := json.Unmarshal(raw, &r); err != nil {
-			a.Error = "上游返回无效 JSON"
+			a.ErrorCode, a.Error = "invalid_event", "上游返回无效 JSON"
+			if readErr != nil {
+				streamReadFailure(&a, readErr)
+			}
 			return a
 		}
 		r.apply(&a)
 		if r.Status != "completed" && a.Error == "" {
-			a.Error = "上游未确认响应完成"
+			a.ErrorCode, a.Error = "stream_incomplete", "上游未确认响应完成"
+			if readErr != nil {
+				streamReadFailure(&a, readErr)
+			}
 		}
 		return limitAnswer(a)
 	}
-	scanner := bufio.NewScanner(io.LimitReader(reader, 32*1024*1024))
-	scanner.Buffer(make([]byte, 64*1024), 16*1024*1024)
+	// Bound each event and the actual answer, not accumulated keepalives or
+	// protocol overhead. Long reasoning streams may contain many small events.
+	scanner := bufio.NewScanner(reader)
+	scanner.Buffer(make([]byte, 64*1024), maxEventSize)
 	var data strings.Builder
-	var text, reasoning strings.Builder
+	output := streamedOutput{parts: map[outputPart]*strings.Builder{}}
 	terminal := false
 	flush := func() error {
 		if data.Len() == 0 {
@@ -97,31 +181,57 @@ func parseResponse(reader io.Reader, contentType string, prompt Prompt) Answer {
 			return io.EOF
 		}
 		var event struct {
-			Type     string           `json:"type"`
-			Delta    string           `json:"delta"`
-			Message  string           `json:"message"`
-			Response responseEnvelope `json:"response"`
-			Error    *struct {
+			Type         string           `json:"type"`
+			Delta        string           `json:"delta"`
+			Text         string           `json:"text"`
+			Refusal      string           `json:"refusal"`
+			OutputIndex  int              `json:"output_index"`
+			ContentIndex int              `json:"content_index"`
+			SummaryIndex int              `json:"summary_index"`
+			Part         responseContent  `json:"part"`
+			Item         responseOutput   `json:"item"`
+			Message      string           `json:"message"`
+			Response     responseEnvelope `json:"response"`
+			Error        *struct {
 				Message string `json:"message"`
 			} `json:"error"`
 		}
 		if err := json.Unmarshal([]byte(raw), &event); err != nil {
+			a.ErrorCode = "invalid_event"
 			return errors.New("上游 SSE 事件不是有效 JSON")
 		}
 		switch event.Type {
+		case "response.created", "response.in_progress":
+			event.Response.metadata(&a)
 		case "response.output_text.delta", "response.refusal.delta":
-			text.WriteString(event.Delta)
+			output.write(outputPart{event.OutputIndex, event.ContentIndex, false}, event.Delta, false)
 		case "response.reasoning_summary_text.delta":
-			reasoning.WriteString(event.Delta)
+			output.write(outputPart{event.OutputIndex, event.SummaryIndex, true}, event.Delta, false)
+		case "response.output_text.done", "response.refusal.done":
+			output.write(outputPart{event.OutputIndex, event.ContentIndex, false}, event.Text+event.Refusal, true)
+		case "response.content_part.done":
+			output.write(outputPart{event.OutputIndex, event.ContentIndex, false}, event.Part.Text+event.Part.Refusal, true)
+		case "response.reasoning_summary_text.done":
+			output.write(outputPart{event.OutputIndex, event.SummaryIndex, true}, event.Text, true)
+		case "response.reasoning_summary_part.done":
+			output.write(outputPart{event.OutputIndex, event.SummaryIndex, true}, event.Part.Text, true)
+		case "response.output_item.done":
+			for i, part := range event.Item.Content {
+				output.write(outputPart{event.OutputIndex, i, false}, part.Text+part.Refusal, true)
+			}
+			for i, part := range event.Item.Summary {
+				output.write(outputPart{event.OutputIndex, i, true}, part.Text, true)
+			}
 		case "response.completed", "response.failed", "response.incomplete":
-			a.Text, a.Reasoning = text.String(), reasoning.String()
+			output.apply(&a)
 			event.Response.apply(&a)
 			terminal = true
 			if event.Type != "response.completed" && a.Error == "" {
-				a.Error = "上游未完整完成响应"
+				a.ErrorCode, a.Error = "upstream_error", "上游未完整完成响应"
 			}
 			return io.EOF
 		case "error":
+			a.ErrorCode = "upstream_error"
 			a.Error = event.Message
 			if event.Error != nil {
 				a.Error = event.Error.Message
@@ -131,7 +241,8 @@ func parseResponse(reader io.Reader, contentType string, prompt Prompt) Answer {
 			}
 			return io.EOF
 		}
-		if text.Len()+reasoning.Len() > maxOutput {
+		if output.size > maxOutput {
+			a.ErrorCode = "output_too_large"
 			return errors.New("输出超过 2 MiB 上限，已保留接收到的部分内容")
 		}
 		return nil
@@ -148,8 +259,9 @@ func parseResponse(reader io.Reader, contentType string, prompt Prompt) Answer {
 			line = strings.TrimPrefix(line, " ")
 			data.WriteString(line)
 			data.WriteByte('\n')
-			if data.Len() > 16*1024*1024 {
-				parseErr = errors.New("上游 SSE 事件超过大小限制")
+			if data.Len() > maxEventSize {
+				a.ErrorCode = "event_too_large"
+				parseErr = errors.New("上游单条 SSE 事件超过 16 MiB 限制，已保留接收到的部分内容")
 				break
 			}
 		}
@@ -158,16 +270,18 @@ func parseResponse(reader io.Reader, contentType string, prompt Prompt) Answer {
 		parseErr = flush()
 	}
 	if !terminal {
-		a.Text, a.Reasoning = text.String(), reasoning.String()
+		output.apply(&a)
 	}
 	if parseErr != nil && parseErr != io.EOF {
 		a.Error = parseErr.Error()
 	}
-	if scanner.Err() != nil && a.Error == "" {
-		a.Error = "上游响应流读取中断或事件过大"
+	// A completed event is authoritative even when the last Read also reports
+	// a closed socket. Otherwise a truncated event is a read failure, not JSON.
+	if !terminal && scanner.Err() != nil && (a.Error == "" || a.ErrorCode == "invalid_event") {
+		streamReadFailure(&a, scanner.Err())
 	}
 	if !terminal && a.Error == "" {
-		a.Error = "上游流提前结束，未收到 response.completed"
+		a.ErrorCode, a.Error = "stream_incomplete", "上游流提前结束，未收到 response.completed；已保留接收到的部分内容"
 	}
 	return limitAnswer(a)
 }
@@ -176,12 +290,14 @@ func limitAnswer(a Answer) Answer {
 		a.Text = utf8Prefix(a.Text, maxOutput)
 		a.Reasoning = utf8Prefix(a.Reasoning, maxOutput-len(a.Text))
 		a.Error = "输出超过 2 MiB 上限，结果不完整"
+		a.ErrorCode = "output_too_large"
 	}
 	if len(a.Usage) > 64*1024 {
 		a.Usage = nil
 	}
 	if a.Text == "" && a.Error == "" {
 		a.Error = "上游没有返回可展示的文本"
+		a.ErrorCode = "empty_response"
 	}
 	return a
 }

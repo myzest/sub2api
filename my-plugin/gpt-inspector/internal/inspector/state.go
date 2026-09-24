@@ -11,7 +11,11 @@ import (
 
 func (s *Server) publishLocked() {
 	s.revision++
-	x := Snapshot{Instance: s.instance, Ready: s.ready, Busy: s.busy, Error: s.lastError, Accounts: s.accounts, Prompts: prompts, Stored: []StoredAccount{}, Active: s.active, Revision: s.revision}
+	x := Snapshot{Instance: s.instance, Ready: s.ready, Busy: s.busy, Error: s.lastError, Accounts: s.accounts, Prompts: prompts, Stored: []StoredAccount{}, Active: []*Batch{}, Revision: s.revision}
+	for _, job := range s.jobs {
+		x.Active = append(x.Active, job.batch)
+	}
+	sort.Slice(x.Active, func(i, j int) bool { return x.Active[i].AccountID < x.Active[j].AccountID })
 	if s.store != nil {
 		x.Bytes = s.store.bytes("")
 	}
@@ -153,10 +157,11 @@ func (s *Server) beginClear(ctx context.Context, c Command) (any, error) {
 	if err := s.store.setJSON(ctx, "control.clear", id); err != nil {
 		return nil, fmt.Errorf("记录清理操作失败：%w", err)
 	}
-	if s.active != nil && (id == 0 || id == s.active.AccountID) {
-		s.cancel()
-		s.active = nil
-		s.cancel = nil
+	for accountID, job := range s.jobs {
+		if id == 0 || id == accountID {
+			job.cancel()
+			delete(s.jobs, accountID)
+		}
 	}
 	s.busy = "正在清理测试数据"
 	s.publishLocked()
