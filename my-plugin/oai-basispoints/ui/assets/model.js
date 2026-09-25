@@ -101,10 +101,11 @@
     const time=Number(r.finished_at||r.started_at);
     const date=Number.isFinite(time)&&time>0?new Date(time*1000).toLocaleString('zh-CN',{hour12:false}):'时间未知';
     const origin=r.origin==='image_route_probe'?'路由探测':'客户端';
-    return `${date} · ${origin} · #${r.account_id} · ${r.model||'模型未解析'} · 图片 ${r.input_images||0} · HTTP ${r.http_status||'—'}${r.error?` · 失败${r.error_source?`（${errorSourceText(r.error_source)}）`:''}`:''}`;
+    return `${date} · ${origin} · #${r.account_id} · ${r.model||'模型未解析'} · 输入图片 ${r.input_images||0} · HTTP ${r.http_status||'—'}${r.error?` · 失败${r.error_source?`（${errorSourceText(r.error_source)}）`:''}`:''}${r.id?` · ID ${r.id.slice(0,8)}`:''}`;
   }
   function diagnosticRuntime(snapshot) {
-    return `当前插件：${snapshot?.version?`v${snapshot.version}`:'版本未提供'} · 实例：${snapshot?.instance||'尚未连接'}`;
+    const cleared=snapshot?.diagnostics_cleared_at;
+    return `当前插件：${snapshot?.version?`v${snapshot.version}`:'版本未提供'} · 实例：${snapshot?.instance||'尚未连接'}${cleared?` · 上次清空：${new Date(cleared*1000).toLocaleString('zh-CN',{hour12:false})}`:''}`;
   }
   function diagnosticStateText(state) {
     const states={captured:'已采集脱敏校验信息',empty:'错误响应体为空',no_fields:'错误 JSON 不包含可采集的校验字段',non_json:'错误响应不是 JSON',invalid_json:'错误 JSON 无法解析',too_large:'错误响应超过采集上限',read_error:'错误响应读取失败'};
@@ -178,6 +179,10 @@
     lines.push(...imageSummaryText(r.upstream_images,'上游图片字段'));
     const types=Object.entries(r.tool_types||{}).map(([name,count])=>`${name} × ${count}`);
     lines.push(`客户端工具类型：${types.length?types.join('，'):'无'}`);
+    const unbridged=Object.entries(r.tool_types||{}).filter(([name,count])=>count>0&&!['function','custom','namespace'].includes(name));
+    if(unbridged.length)lines.push(`未桥接的工具类型：${unbridged.map(([name,count])=>`${name} × ${count}`).join('，')}（不会作为可调用工具发送给 BPS）`);
+    if(r.tool_types?.image_generation)lines.push('原生生图声明：已收到 image_generation，但本插件尚未适配其执行与图片结果返回。');
+    else lines.push('原生生图声明：本次摘要未记录到 image_generation；不能据此排除 function/custom 或客户端动态提供的生图工具。');
     const sources=Object.entries(r.tool_sources||{}).map(([name,count])=>`${name} × ${count}`);
     if(sources.length)lines.push(`工具声明来源（未展开 namespace）：${sources.join('，')}`);
     if(r.additional_tool_items)lines.push(`additional_tools 输入项：${r.additional_tool_items}`);
@@ -189,6 +194,7 @@
     lines.push(...replayText(r.replay));
     lines.push(`可调用工具：${r.callable_tools||0}`);
     if(r.tool_names?.length)lines.push(`工具名称（最多 32 个）：${r.tool_names.slice(0,32).join('，')}`);
+    if(r.callable_tools>(r.tool_names?.length||0))lines.push('工具名称列表已截断；未显示的名称不能据此判定为不存在。');
     lines.push(`tool_choice：${r.tool_choice===undefined||r.tool_choice===''?'未显式指定':valueText(r.tool_choice)}`);
     lines.push(`parallel_tool_calls：${r.parallel_tool_calls===undefined?'未显式指定':valueText(r.parallel_tool_calls)}`);
     lines.push(`输出工具调用：${r.output_tool_calls||0}`);

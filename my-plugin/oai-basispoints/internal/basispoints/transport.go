@@ -105,7 +105,7 @@ func (s *Server) Forward(stream pluginv1.TransportPlugin_ForwardServer) (result 
 		}
 		return s.passthrough(w, start)
 	}
-	d := &requestDiagnostic{ID: newID(), Version: Version, Instance: s.instance, Origin: "route", ImageTransport: cfg.ImageTransport, AccountID: start.AccountId, StartedAt: time.Now().Unix(), Stage: "request", ToolTypes: map[string]int{}, ToolNames: []string{}}
+	d := s.startDiagnostic(start.AccountId, cfg.ImageTransport)
 	if isRouteProbe {
 		d.Origin = "image_route_probe"
 	}

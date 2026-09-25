@@ -51,8 +51,8 @@
     <p class="hint">探测成功只代表本次链路结果，不能证明模型“不降智”或所有 Codex 功能均可用。</p>
   </section>
   <section aria-labelledby="image-diagnostic-title">
-    <div class="section-title"><h2 id="image-diagnostic-title">图片路由诊断</h2><button id="refresh-image-diagnostic" class="secondary" type="button">刷新图片诊断</button></div>
-    <p class="hint">独立保留本实例最近 10 次已结束的图片请求，普通文本请求不会覆盖它们。拖图失败后可在这里选择对应的 HTTP 400 记录，查看附件上传、Responses 响应和图片字段摘要。刷新只读取状态，不发送上游请求。</p>
+    <div class="section-title"><h2 id="image-diagnostic-title">图片路由诊断</h2><div class="actions"><button id="refresh-image-diagnostic" class="secondary" type="button">刷新图片诊断</button><button id="clear-image-diagnostics" class="secondary" type="button">清空全部诊断历史</button></div></div>
+    <p class="hint">独立保留本实例最近 10 次已结束的输入图片请求，普通文本请求不会覆盖它们。拖图失败后可在这里选择对应的 HTTP 400 记录，查看附件上传、Responses 响应和图片字段摘要。生图请求请查看下方“最近路由请求”；识图探测通过不代表生图可用。刷新只读取状态，不发送上游请求。</p>
     <p id="image-diagnostic-runtime" class="hint">当前插件版本与实例：等待连接</p>
     <label for="image-request-history">图片请求历史</label>
     <select id="image-request-history" disabled><option value="">最新完成请求（刷新时自动跟随）</option></select>
@@ -60,14 +60,15 @@
     <p class="hint">只展示字段位置、来源形态、detail、MIME、长度及脱敏错误，不展示图片或对话正文。实例变化时历史会清空；如桌面请求未出现，请先核对路由账号及当前插件实例。</p>
   </section>
   <section aria-labelledby="diagnostic-title">
-    <div class="section-title"><h2 id="diagnostic-title">最近路由请求</h2><button id="refresh-diagnostic" class="secondary" type="button">刷新诊断</button></div>
+    <div class="section-title"><h2 id="diagnostic-title">最近路由请求</h2><div class="actions"><button id="refresh-diagnostic" class="secondary" type="button">刷新诊断</button><button id="clear-diagnostics" class="secondary" type="button">清空全部诊断历史</button></div></div>
     <p class="hint">在 Codex 中重试后刷新，可选择本实例最近 20 次已结束的 BPS 路由请求。选定记录会保留显示；切回“最新完成请求”后，刷新时自动跟随最新记录。这里只记录协议字段、数量与状态，不记录对话、工具参数、图片或 token；刷新不发送上游请求。文件读取、命令和 Skills 由 Codex 客户端的工具及权限执行。</p>
+    <p class="hint">清空按钮同时删除本实例所有设备的路由与图片诊断摘要，并从此刻重新记录；清空时正在处理的旧请求结束后也不会回到列表。不会删除会话、工具回放或附件缓存，也不会中断请求。要定位单台设备：先让其他设备暂停发送请求，清空后在目标设备重试一次，结束后刷新本区。</p>
     <p id="diagnostic-runtime" class="hint">当前插件版本与实例：等待连接</p>
     <label for="request-history">请求历史</label>
     <select id="request-history" disabled><option value="">最新完成请求（刷新时自动跟随）</option></select>
     <div id="request-diagnostic" class="result" role="status" aria-live="polite">尚无已结束的 BPS 路由请求。</div>
   </section>
-  <footer>v0.1.10 · 增加工具信封兼容、缺失记录的完整历史转换及分层诊断；原生搜索与 /responses/compact 暂未接入。</footer>
+  <footer>v0.1.11 · 支持清空诊断历史与未桥接工具提示；原生生图、搜索与 /responses/compact 暂未接入。</footer>
 </main>
 <script src="assets/bridge-v1.js"></script><script src="assets/model.js"></script><script src="assets/app.js"></script>
 </body></html>

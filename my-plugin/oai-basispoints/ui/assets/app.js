@@ -10,6 +10,7 @@
     const running=snapshot?.probe?.state==='running';
     for(const id of ['save','refresh','probe','probe-image','probe-image-route','probe-tools'])$(id).disabled=busy||!snapshot?.host_ready||(id.startsWith('probe')&&running);
     for(const id of ['refresh-diagnostic','refresh-image-diagnostic'])$(id).disabled=busy||!snapshot;
+    for(const id of ['clear-diagnostics','clear-image-diagnostics'])$(id).disabled=busy||!snapshot;
   }
   function refreshModels(){const old=$('probe-model').value;$('probe-model').replaceChildren(...model.models($('models').value).map(name=>new Option(name,name)));if([...$('probe-model').options].some(o=>o.value===old))$('probe-model').value=old;}
   function populate(c){$('route-enabled').checked=c.route_enabled;$('models').value=c.models.join('\n');$('effort').value=c.default_effort==='max'?'xhigh':c.default_effort;$('ultra').checked=c.allow_ultra;$('timeout').value=c.timeout_seconds;$('ttl').value=c.replay_ttl_seconds/3600;$('image-transport').value=c.image_transport;refreshModels();renderAccounts(c.account_ids);}
@@ -74,7 +75,7 @@
     const preview=['image','image_route'].includes(snapshot.probe?.kind)?model.imagePreview(snapshot.probe.image_preview):'';
     $('image-preview').hidden=!preview;
     if(preview){if($('image-preview-img').getAttribute('src')!==preview)$('image-preview-img').src=preview;}else $('image-preview-img').removeAttribute('src');
-    renderDiagnostics(Boolean(previous?.instance&&previous.instance!==snapshot.instance));
+    renderDiagnostics(Boolean(previous&&(previous.instance!==snapshot.instance||previous.diagnostic_generation!==snapshot.diagnostic_generation)));
     if(statusFailed){notice('状态查询已恢复。');statusFailed=false;}
     if(observedInstance&&observedInstance!==snapshot.instance)notice('插件已重启；请检查保存的设置。',true);observedInstance=snapshot.instance;buttons();
     success=true;
@@ -110,6 +111,20 @@
   }
   for(const [id,action] of [['probe','probe'],['probe-image','probe_image'],['probe-image-route','probe_image_route'],['probe-tools','probe_tools']])$(id).addEventListener('click',()=>run(()=>probe(action)));
   for(const id of ['refresh-diagnostic','refresh-image-diagnostic'])$(id).addEventListener('click',()=>run(async()=>{await status();notice('路由诊断与历史已刷新，未发送上游请求。');}));
+  for(const id of ['clear-diagnostics','clear-image-diagnostics'])$(id).addEventListener('click',()=>run(async()=>{
+    // UI Bridge v1 executes commands via saved config. Load the current settings
+    // first so clearing history never submits this window's unsaved form.
+    const latest=model.config((await bridge.call('config.load')).config);
+    const changed=JSON.stringify(latest)!==JSON.stringify(saved);saved=latest;
+    const cmd=command('clear_diagnostics');await save(cmd,true);const {data}=await test(cmd);
+    await statusTail;
+    if(snapshot.instance===cmd.instance&&data?.diagnostic_generation>=(snapshot.diagnostic_generation||0)){
+      snapshot={...snapshot,...data,last_request:null,recent_requests:[],image_requests:[]};
+      renderDiagnostics(true);
+    }
+    notice('已清空本实例全部路由与图片诊断历史。请在目标客户端重试，完成后刷新诊断。'+(changed?' 检测到其他窗口修改配置，已沿用服务器设置；当前表单尚未保存。':''));
+    await status();
+  }));
   for(const [id,kind] of [['request-history','request'],['image-request-history','image']])$(id).addEventListener('change',()=>{
     const selection=diagnosticSelections[kind];selection.id=$(id).value;
     if(!selection.id)selection.record=null;

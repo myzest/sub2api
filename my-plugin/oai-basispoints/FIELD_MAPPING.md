@@ -1,4 +1,4 @@
-# 字段处理与源码依据（0.1.10）
+# 字段处理与源码依据（0.1.11）
 
 这里的“有依据”指参考仓库已实现该行为，不代表本插件已在用户桌面端或 BPS 实机验证。用户已要求自行验收，本次不运行测试或探测。
 
@@ -88,6 +88,13 @@
 - 附件仍使用 CPA 的 multipart `file` 与 `openai_file_id`，没有在 Responses 的 `input_image` 擅自添加 MIME/filename。缓存键包含上传格式与扩展名；缓存只在进程内存，启动新实例清空。
 - 附件文件名/MIME/长度摘要与 JPEG/PNG 探测选择属于本地观测及生成样本，不是新增上游协议。原有 PNG 探测通过不能覆盖 JPEG 路径。
 - 旧工具历史依据：[CPA `fallbackTransportCall` / `translateInputItems`](https://github.com/JaxsonWang/cpa-plugin-oai-basispoints/blob/708082da2f851569984de395d25405e61c2bbc34/internal/basispoints/protocol.go)、[Excel `_fallback_transport_call` / `translate_input_items`](https://github.com/Kaixxrua/excel-codex-bridge/blob/b2d6f2529b6ffa9f1a630f17b7037ef6dcc0480a/src/excel_codex_bridge/excel_upstream.py)。用户确认在切换通道/模型或继续旧任务后遇到非插件句柄错误，本版取消对完整外部历史的无条件拒绝；不把缺失参数补为空对象，也不为孤立结果编造调用。
+
+## 0.1.11 诊断历史与生图边界
+
+- 参考 [CPA iterToolValues](https://github.com/JaxsonWang/cpa-plugin-oai-basispoints/blob/708082da2f851569984de395d25405e61c2bbc34/internal/basispoints/protocol.go#L37) 与 [Excel _iter_client_tools](https://github.com/Kaixxrua/excel-codex-bridge/blob/b2d6f2529b6ffa9f1a630f17b7037ef6dcc0480a/src/excel_codex_bridge/excel_upstream.py#L237)，本插件仍仅桥接 function/custom/namespace 叶子。原生 image_generation、tool_search 等类型会被统计但不进入目录，本版 UI 将该边界明确显示；不会根据工具名字猜测其生图能力。
+- `clear_diagnostics` 是插件本地管理命令，复用 Host UI Bridge v1 config.save/config.test；ApplyConfig 本身不会执行命令。清空不发送 BPS 请求，不改变请求字段、工具回放和图片上传协议。
+- 状态新增 `diagnostic_generation` 与 `diagnostics_cleared_at`，只用于清空后的请求归档和 UI 选择同步。清空时更新代次及两个内存历史，旧代次在途请求完成后跳过归档。
+- [宿主生图入口](../../backend/internal/service/openai_images.go)、[OAuth 直调构造](../../backend/internal/service/openai_images_direct.go)和 [OAuth 转发](../../backend/internal/service/openai_images_responses.go)提供后续普通通道接入的源码依据，不能等同于已经接通 BPS 原生生图。当前插件端点限制见 `internal/basispoints/transport.go`。
 
 ## 0.1.10 运维反馈修正
 

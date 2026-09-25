@@ -11,7 +11,7 @@ import (
 
 const (
 	PluginID    = "local.sub2api.oai-basispoints"
-	Version     = "0.1.10"
+	Version     = "0.1.11"
 	Capability  = "openai.oauth.outbound_transport.v1"
 	bpsURL      = "https://bps.openai.com/basispoints/api/responses"
 	maxBody     = 8 << 20
@@ -107,10 +107,10 @@ func parseConfig(raw []byte) (Config, error) {
 		if !idPattern.MatchString(cmd.ID) || !idPattern.MatchString(cmd.Instance) || cmd.IssuedAt <= 0 {
 			return c, errors.New("操作标识无效，请重新打开插件页面")
 		}
-		if cmd.Action != "accounts" && cmd.Action != "probe" && cmd.Action != "probe_image" && cmd.Action != "probe_tools" && cmd.Action != "probe_image_route" {
+		if cmd.Action != "accounts" && cmd.Action != "clear_diagnostics" && cmd.Action != "probe" && cmd.Action != "probe_image" && cmd.Action != "probe_tools" && cmd.Action != "probe_image_route" {
 			return c, errors.New("不支持的操作")
 		}
-		if cmd.Action != "accounts" {
+		if cmd.Action != "accounts" && cmd.Action != "clear_diagnostics" {
 			if cmd.AccountID <= 0 || !slices.Contains(c.Models, cmd.Model) {
 				return c, errors.New("探测需要选择账号和允许的模型")
 			}

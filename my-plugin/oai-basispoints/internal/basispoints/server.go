@@ -57,16 +57,18 @@ type Probe struct {
 	RouteDiagnosticID string             `json:"route_diagnostic_id,omitempty"`
 }
 type Snapshot struct {
-	Instance       string               `json:"instance"`
-	Version        string               `json:"version"`
-	HostReady      bool                 `json:"host_ready"`
-	Config         Config               `json:"config"`
-	Accounts       []Account            `json:"accounts"`
-	LastError      string               `json:"last_error,omitempty"`
-	Probe          *Probe               `json:"probe,omitempty"`
-	LastRequest    *requestDiagnostic   `json:"last_request,omitempty"`
-	RecentRequests []*requestDiagnostic `json:"recent_requests,omitempty"`
-	ImageRequests  []*requestDiagnostic `json:"image_requests,omitempty"`
+	Instance             string               `json:"instance"`
+	Version              string               `json:"version"`
+	HostReady            bool                 `json:"host_ready"`
+	Config               Config               `json:"config"`
+	Accounts             []Account            `json:"accounts"`
+	LastError            string               `json:"last_error,omitempty"`
+	Probe                *Probe               `json:"probe,omitempty"`
+	LastRequest          *requestDiagnostic   `json:"last_request,omitempty"`
+	RecentRequests       []*requestDiagnostic `json:"recent_requests,omitempty"`
+	ImageRequests        []*requestDiagnostic `json:"image_requests,omitempty"`
+	DiagnosticGeneration uint64               `json:"diagnostic_generation"`
+	DiagnosticsClearedAt int64                `json:"diagnostics_cleared_at,omitempty"`
 }
 type commandResult struct {
 	fingerprint string
@@ -77,23 +79,25 @@ type commandResult struct {
 
 type Server struct {
 	pluginv1.UnimplementedTransportPluginServer
-	broker         *hcplugin.GRPCBroker
-	conn           *grpc.ClientConn
-	mu             sync.RWMutex
-	host           pluginv1.HostServiceClient
-	cfg            Config
-	instance       string
-	accounts       []Account
-	lastError      string
-	probe          *Probe
-	lastRequest    *requestDiagnostic
-	recentRequests []*requestDiagnostic
-	imageRequests  []*requestDiagnostic
-	commands       sync.Mutex
-	seen           map[string]commandResult
-	pool           transportPool
-	attachments    attachmentCache
-	responsesURL   string // Fixed in production; only package tests may substitute a fixture.
+	broker               *hcplugin.GRPCBroker
+	conn                 *grpc.ClientConn
+	mu                   sync.RWMutex
+	host                 pluginv1.HostServiceClient
+	cfg                  Config
+	instance             string
+	accounts             []Account
+	lastError            string
+	probe                *Probe
+	lastRequest          *requestDiagnostic
+	recentRequests       []*requestDiagnostic
+	imageRequests        []*requestDiagnostic
+	diagnosticGeneration uint64
+	diagnosticsClearedAt int64
+	commands             sync.Mutex
+	seen                 map[string]commandResult
+	pool                 transportPool
+	attachments          attachmentCache
+	responsesURL         string // Fixed in production; only package tests may substitute a fixture.
 }
 
 func newID() string { var b [16]byte; _, _ = rand.Read(b[:]); return hex.EncodeToString(b[:]) }
@@ -115,7 +119,7 @@ func (s *Server) Health(context.Context, *pluginv1.HealthRequest) (*pluginv1.Hea
 	defer s.mu.RUnlock()
 	c := s.cfg
 	c.Command = nil
-	raw := encoded(Snapshot{Instance: s.instance, Version: Version, HostReady: s.host != nil, Config: c, Accounts: s.accounts, LastError: s.lastError, Probe: s.probe, LastRequest: s.lastRequest, RecentRequests: s.recentRequests, ImageRequests: s.imageRequests})
+	raw := encoded(Snapshot{Instance: s.instance, Version: Version, HostReady: s.host != nil, Config: c, Accounts: s.accounts, LastError: s.lastError, Probe: s.probe, LastRequest: s.lastRequest, RecentRequests: s.recentRequests, ImageRequests: s.imageRequests, DiagnosticGeneration: s.diagnosticGeneration, DiagnosticsClearedAt: s.diagnosticsClearedAt})
 	return &pluginv1.HealthResponse{Healthy: true, Message: "Basis Points 插件运行中", StatusJson: string(raw)}, nil
 }
 func (s *Server) ValidateConfig(_ context.Context, r *pluginv1.ValidateConfigRequest) (*pluginv1.ValidateConfigResponse, error) {
@@ -209,7 +213,7 @@ func (s *Server) TestConfig(ctx context.Context, r *pluginv1.TestConfigRequest) 
 	cfg, err := parseConfig(r.ConfigJson)
 	var value any
 	if err == nil && cfg.Command == nil {
-		err = errors.New("请在插件页面选择刷新账号或单账号探测")
+		err = errors.New("请在插件页面选择刷新账号、清空诊断历史或单账号探测")
 	}
 	if err == nil {
 		value, err = s.command(ctx, cfg)
@@ -250,6 +254,8 @@ func (s *Server) command(ctx context.Context, cfg Config) (any, error) {
 	var err error
 	if c.Action == "accounts" {
 		value, err = s.listAccounts(ctx)
+	} else if c.Action == "clear_diagnostics" {
+		value = s.clearDiagnostics()
 	} else {
 		s.mu.Lock()
 		if s.host == nil {

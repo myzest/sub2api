@@ -9,6 +9,7 @@ import (
 // Bounded completed-request summaries are retained only in memory. Raw request
 // bodies, image URLs/pixels, schemas and tool arguments are never stored here.
 type requestDiagnostic struct {
+	generation           uint64            // Captured at ingress; a clear also excludes older in-flight requests.
 	ID                   string            `json:"id"`
 	Version              string            `json:"version"`
 	Instance             string            `json:"instance"`
@@ -181,15 +182,33 @@ func (d *requestDiagnostic) catalog(c *toolCatalog) {
 	}
 }
 
+func (s *Server) startDiagnostic(accountID int64, imageTransport string) *requestDiagnostic {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return &requestDiagnostic{generation: s.diagnosticGeneration, ID: newID(), Version: Version, Instance: s.instance, Origin: "route", ImageTransport: imageTransport, AccountID: accountID, StartedAt: time.Now().Unix(), Stage: "request", ToolTypes: map[string]int{}, ToolNames: []string{}}
+}
+
+func (s *Server) clearDiagnostics() object {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.diagnosticGeneration++
+	s.diagnosticsClearedAt = time.Now().Unix()
+	s.lastRequest, s.recentRequests, s.imageRequests = nil, nil, nil
+	return object{"diagnostic_generation": s.diagnosticGeneration, "diagnostics_cleared_at": s.diagnosticsClearedAt}
+}
+
 func (s *Server) finishDiagnostic(d *requestDiagnostic) {
 	d.FinishedAt = time.Now().Unix()
 	s.mu.Lock()
+	defer s.mu.Unlock()
+	if d.generation != s.diagnosticGeneration {
+		return
+	}
 	s.lastRequest = d
 	s.recentRequests = prependDiagnostic(s.recentRequests, d, 20)
 	if d.InputImages > 0 {
 		s.imageRequests = prependDiagnostic(s.imageRequests, d, 10)
 	}
-	s.mu.Unlock()
 }
 
 func prependDiagnostic(history []*requestDiagnostic, d *requestDiagnostic, limit int) []*requestDiagnostic {
