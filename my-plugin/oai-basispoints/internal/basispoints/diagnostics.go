@@ -46,6 +46,17 @@ type requestDiagnostic struct {
 	NativeToolNames      []string          `json:"native_tool_names,omitempty"`
 	Terminal             string            `json:"terminal,omitempty"`
 	Error                string            `json:"error,omitempty"`
+	ErrorSource          string            `json:"error_source,omitempty"`
+	ResponsesStarted     bool              `json:"responses_started"`
+	ClientHTTPStatus     int               `json:"client_http_status,omitempty"`
+	Relay                []relayDiagnostic `json:"relay,omitempty"`
+	Replay               *replayDiagnostic `json:"replay,omitempty"`
+}
+
+func (d *requestDiagnostic) observeRelay(value relayDiagnostic) {
+	if len(d.Relay) < 16 {
+		d.Relay = append(d.Relay, value)
+	}
 }
 
 func (d *requestDiagnostic) input(raw []byte) {

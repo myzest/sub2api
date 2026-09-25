@@ -1,4 +1,4 @@
-# 字段处理与源码依据（0.1.9）
+# 字段处理与源码依据（0.1.10）
 
 这里的“有依据”指参考仓库已实现该行为，不代表本插件已在用户桌面端或 BPS 实机验证。用户已要求自行验收，本次不运行测试或探测。
 
@@ -26,10 +26,10 @@
 | item_reference | 按两仓库规则过滤，不尝试网络拉取或 KV 解析；必须提交完整会话历史 |
 | additional_tools | 收集 tools 中的 function/custom/namespace，保留原位置转为 developer 中继目录；原始 carrier 不送 BPS。相同叶子定义去重、冲突报错；本轮 tool_choice 限制同时作用于这些目录 |
 | compaction、compaction_summary、compaction_trigger | 普通透传，不删除 id/call_id，不额外检查加密内容，不重排位置 |
-| function/custom 调用 | 插件句柄恢复 KV 中的完整原生 item；外部完整历史按 CPA/Excel fallback 构造历史 run_officejs 调用，保留 namespace 与原始 payload；JSON 解码使用 UseNumber 保留大整数精度 |
-| function/custom 结果 | 保留 output 结构及扩展字段，恢复原生 call_id、function_call_output 类型和 fc_ ID，按 CPA v0.1.8 删除客户端 name/namespace；null 或空白字符串补为参考项目的成功占位文本 |
+| function/custom 调用 | 插件句柄优先恢复同范围 KV；未命中或外部完整历史按 CPA/Excel fallback 构造历史 run_officejs 输入，保留 namespace 与原始 payload；JSON 解码使用 UseNumber 保留大整数精度 |
+| function/custom 结果 | 保留 output 结构及扩展字段，恢复原生 call_id、function_call_output 类型和 fc_ ID，按 CPA v0.1.8 删除客户端 name/namespace；通常将 null 或空白字符串补为参考成功占位文本，但缺失原生记录的历史转换要求原始 output 存在且非 null |
 
-工具回放保留多账号隔离：本插件句柄绑定宿主账号、会话、模型和随机句柄，校验过期及调用内容，缺失或过期不会转入 fallback。0.1.8 对非插件句柄接入参考项目的历史 fallback：只消费本请求提供的完整调用及配对结果，不跨账号读 KV、不发起旧工具执行。不以当前工具目录或 tool_choice 重新限制已经执行的历史（对应 Excel 的历史处理）；它们仍限制新输出。缺失/重复/乱序结果、无效参数或异常插件标记仍拒绝。0.1.9 区分空字符串 custom input 与缺失/非字符串值，拒绝对象、数组、数字等 namespace 值（缺省/null 仍按未指定命名空间处理）；重复已知前缀内的 bp_ 标记仍属于异常插件句柄，不进入 fallback。跨模型的加密状态与跨通道文件 ID 不在此修复范围。
+原生工具回放按宿主账号、会话、模型和随机句柄隔离，命中后校验过期及调用内容。0.1.8 为非插件句柄接入完整历史 fallback；0.1.10 将相同处理扩展到合法插件句柄的 KV 未命中，匹配参考项目“rememberedNativeCall 无记录时转换完整调用”的行为。只消费本请求提供的完整调用及配对结果，不跨账号查 KV、不写入伪造原生记录、不发起旧工具执行。明确过期/损坏的已存记录、存储错误、孤立/重复/缺失结果继续拒绝。当前工具目录及 tool_choice 约束新输出，不重新限制已执行历史。0.1.9 的 custom input 类型、namespace 类型、异常多重前缀检查保留。跨模型加密状态与跨通道文件 ID 不在此修复范围。
 
 ## 顶层请求
 
@@ -68,7 +68,7 @@
 | sequence_number | 工具事件被重建后重新连续编号；不能同时承诺原 sequence_number 不变 |
 | JSON 响应 | 非流客户端收到转换后的 JSON；流客户端遇到 JSON 回包时保留既有桥接。未知内容保留在 item/终态，不猜测新的内容增量协议 |
 | failed、incomplete、提前 EOF | 不伪造 completed，不释放失败响应中的原生工具 |
-| 错误 | HTTP 状态码和限流/request ID headers 保留；客户端错误附诊断 ID，后台额外提取受限、脱敏的上游校验字段。原始错误正文、failed.error 和流内错误不直接转发。工具回放错误仅展示 input 序号和 type |
+| 错误 | HTTP 状态码和限流/request ID headers 保留；客户端错误附诊断 ID，后台记录来源、信封形态与有界解析类别/偏移、回放计数，不记录工具参数正文；原始上游错误、failed.error 和流内错误不直接转发 |
 
 ## 0.1.4 新增依据
 
@@ -88,6 +88,17 @@
 - 附件仍使用 CPA 的 multipart `file` 与 `openai_file_id`，没有在 Responses 的 `input_image` 擅自添加 MIME/filename。缓存键包含上传格式与扩展名；缓存只在进程内存，启动新实例清空。
 - 附件文件名/MIME/长度摘要与 JPEG/PNG 探测选择属于本地观测及生成样本，不是新增上游协议。原有 PNG 探测通过不能覆盖 JPEG 路径。
 - 旧工具历史依据：[CPA `fallbackTransportCall` / `translateInputItems`](https://github.com/JaxsonWang/cpa-plugin-oai-basispoints/blob/708082da2f851569984de395d25405e61c2bbc34/internal/basispoints/protocol.go)、[Excel `_fallback_transport_call` / `translate_input_items`](https://github.com/Kaixxrua/excel-codex-bridge/blob/b2d6f2529b6ffa9f1a630f17b7037ef6dcc0480a/src/excel_codex_bridge/excel_upstream.py)。用户确认在切换通道/模型或继续旧任务后遇到非插件句柄错误，本版取消对完整外部历史的无条件拒绝；不把缺失参数补为空对象，也不为孤立结果编造调用。
+
+## 0.1.10 运维反馈修正
+
+- 信封解包依据 [CPA transportEnvelope](https://github.com/JaxsonWang/cpa-plugin-oai-basispoints/blob/708082da2f851569984de395d25405e61c2bbc34/internal/basispoints/protocol.go#L623)：最多两层，仍是单工具 JSON 信封。
+- 围栏兼容取自 [Excel _decode_transport_code](https://github.com/Kaixxrua/excel-codex-bridge/blob/b2d6f2529b6ffa9f1a630f17b7037ef6dcc0480a/src/excel_codex_bridge/excel_upstream.py#L396) 的较窄子集：仅完整 JSON/无语言围栏，不扫描任意文本中的第一个对象，不修非法反斜杠。解析仍拒绝重复键、多对象、尾随数据及过深嵌套；偏移以当前层解码内容为准。
+- 缺失原生记录的完整历史转换对应 [CPA translateInputItems / fallbackTransportCall](https://github.com/JaxsonWang/cpa-plugin-oai-basispoints/blob/708082da2f851569984de395d25405e61c2bbc34/internal/basispoints/protocol.go#L324)。此路径仅使用客户端已提供内容，无法保留原生不透明状态。未命中不再直接推定过期；KV 故障及已找到但校验失败的记录不会降级。
+- 工具探测拓展为三轮 custom/function/结果核对，全部使用虚拟工具；生成样本不会在服务器或客户端运行。
+- 模型白名单拒绝增加本地配置错误码与来源，不修改模型名或允许列表；Responses 发送阶段与 HTTP/流式转换结果分开展示。
+- 宿主 Redis miss 与日志字段为单独源码修改，不属于 BPS 协议；未调整 WS 超时、选号或重试。
+
+本次未取得两条 JSON 解析故障的原始 code 形态，也未取得新回放故障发生前后的范围指纹。兼容路径有参考依据，但不能宣称已复现或已实机解决全部反馈。
 
 ## 0.1.9 审查修正
 

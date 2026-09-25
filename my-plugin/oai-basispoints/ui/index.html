@@ -13,7 +13,7 @@
     <div id="accounts" class="accounts"><p class="hint">等待账号目录…</p></div>
     <label for="models">允许的模型（每行一个）</label>
     <textarea id="models" rows="4" spellcheck="false" placeholder="gpt-5.6-sol"></textarea>
-    <p class="hint">沿用模型原名。默认包含 gpt-6-astra，可在下方探测账号是否支持。</p>
+    <p class="hint">沿用模型原名。gpt-6-sol 与 gpt-5.6-sol 是不同名称；未列出的模型会在本地拒绝。默认包含 gpt-6-astra，可在下方探测账号是否支持。</p>
     <div class="grid">
       <div><label for="effort">未指定时的推理强度</label><select id="effort"><option>low</option><option>medium</option><option>high</option><option>xhigh</option><option>ultra</option></select></div>
       <div><label for="timeout">请求超时（秒）</label><input id="timeout" type="number" min="10" max="3600" step="1"></div>
@@ -23,12 +23,12 @@
     <select id="image-transport"><option value="attachment">同源附件上传（默认）</option><option value="passthrough">原样透传（用于对照）</option></select>
     <p class="hint">附件模式将内嵌图片上传到 BPS 同源附件接口，再传递文件 ID。保留原图与 detail，不自动降低图片精度。原样透传用于对照旧行为。</p>
     <label class="check"><input id="ultra" type="checkbox"> 允许实验性 ultra（原样传递，不回退到较低强度）</label>
-    <p class="hint">客户端指定的 effort 优先；max 映射为 xhigh。回放存储包含工具参数，过期后需要开启新会话。</p>
+    <p class="hint">客户端指定的 effort 优先；max 映射为 xhigh。回放存储包含工具参数；记录缺失时，需要客户端发送完整调用和结果才能转换历史。</p>
     <button id="save" type="button">保存设置</button>
   </section>
   <section aria-labelledby="probe-title">
     <h2 id="probe-title">单账号探测</h2>
-    <p class="hint">无需导出凭据，无需已有 Excel 对话。下方操作会先保存当前设置，再使用所选账号额度探测；同一时间只能运行一项，最长等待 120 秒。文本和图片各一次模型请求（附件模式的图片另需上传），工具最多两次模型请求。</p>
+    <p class="hint">无需导出凭据，无需已有 Excel 对话。下方操作会先保存当前设置，再使用所选账号额度探测；同一时间只能运行一项，最长等待 120 秒。文本和图片各一次模型请求（附件模式的图片另需上传），工具最多三次模型请求。</p>
     <div class="grid">
       <div><label for="probe-account">账号</label><select id="probe-account"></select></div>
       <div><label for="probe-model">模型</label><select id="probe-model"></select></div>
@@ -38,7 +38,7 @@
       <div><label for="image-format">图片探测格式</label><select id="image-format"><option value="jpeg">JPEG（默认，覆盖桌面拖图格式）</option><option value="png">PNG（对照）</option></select></div>
       <div><label for="image-detail">图片探测 detail</label><select id="image-detail"><option value="high">high（默认）</option><option value="auto">auto</option><option value="low">low</option><option value="original">original</option></select></div>
     </div>
-    <p class="hint">图片探测生成一张所选格式的随机数字图，验证传输方式与 detail；答案只用于本地比对。JPEG 与 PNG 需分别点击探测。工具探测验证 custom 工具及两轮结果回放；结果由本地模拟，不代表桌面端实际读取过文件。</p>
+    <p class="hint">图片探测生成一张所选格式的随机数字图，验证传输方式与 detail。工具探测依次验证 custom 多行输入、function 嵌套参数和三轮回放，包含引号、反斜杠及大整数；结果由本地模拟，不执行代码或读取文件。</p>
     <div class="actions">
       <button id="probe" type="button">保存并探测文本</button>
       <button id="probe-image" class="secondary" type="button">保存并探测图片</button>
@@ -67,7 +67,7 @@
     <select id="request-history" disabled><option value="">最新完成请求（刷新时自动跟随）</option></select>
     <div id="request-diagnostic" class="result" role="status" aria-live="polite">尚无已结束的 BPS 路由请求。</div>
   </section>
-  <footer>v0.1.9 · 支持图片附件、完整外部工具历史转换及插件原生回放；原生搜索与 /responses/compact 暂未接入。</footer>
+  <footer>v0.1.10 · 增加工具信封兼容、缺失记录的完整历史转换及分层诊断；原生搜索与 /responses/compact 暂未接入。</footer>
 </main>
 <script src="assets/bridge-v1.js"></script><script src="assets/model.js"></script><script src="assets/app.js"></script>
 </body></html>

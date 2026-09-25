@@ -25,12 +25,19 @@ type forwardWriter struct {
 func (w *forwardWriter) fail(code, message string, sent bool) error {
 	if w.diagnostic != nil {
 		w.diagnostic.Error = limitCharacters(code+": "+message, 1600)
+		if w.diagnostic.ErrorSource == "" {
+			w.diagnostic.ErrorSource = "plugin_transport"
+		}
 		message += "；诊断 ID：" + w.diagnostic.ID
 	}
 	return w.stream.Send(&pluginv1.ForwardResponse{Frame: &pluginv1.ForwardResponse_Error{Error: &pluginv1.ForwardResponseError{Code: code, Message: message, RequestSent: sent}}})
 }
 func (w *forwardWriter) start(resp *http.Response) error {
-	return w.stream.Send(&pluginv1.ForwardResponse{Frame: &pluginv1.ForwardResponse_Start{Start: &pluginv1.ForwardResponseStart{StatusCode: int32(resp.StatusCode), Status: resp.Status, Protocol: resp.Proto, ProtocolMajor: int32(resp.ProtoMajor), ProtocolMinor: int32(resp.ProtoMinor), Headers: headersToProto(resp.Header), ContentLength: resp.ContentLength}}})
+	err := w.stream.Send(&pluginv1.ForwardResponse{Frame: &pluginv1.ForwardResponse_Start{Start: &pluginv1.ForwardResponseStart{StatusCode: int32(resp.StatusCode), Status: resp.Status, Protocol: resp.Proto, ProtocolMajor: int32(resp.ProtoMajor), ProtocolMinor: int32(resp.ProtoMinor), Headers: headersToProto(resp.Header), ContentLength: resp.ContentLength}}})
+	if err == nil && w.diagnostic != nil {
+		w.diagnostic.ClientHTTPStatus = resp.StatusCode
+	}
+	return err
 }
 func (w *forwardWriter) body(raw []byte) error {
 	for len(raw) > 0 {
@@ -52,6 +59,8 @@ func (w *forwardWriter) json(status int, value any, headers http.Header) error {
 			if failure, ok := body["error"].(object); ok {
 				w.diagnostic.Error = limitCharacters(str(failure, "code")+": "+str(failure, "message"), 1600)
 				failure["diagnostic_id"] = w.diagnostic.ID
+				failure["source"] = w.diagnostic.ErrorSource
+				failure["responses_started"] = w.diagnostic.ResponsesStarted
 				failure["message"] = str(failure, "message") + "；诊断 ID：" + w.diagnostic.ID
 			}
 		}
@@ -72,6 +81,9 @@ func (w *forwardWriter) json(status int, value any, headers http.Header) error {
 	return w.end()
 }
 func (w *forwardWriter) reject(status int, code, message string) error {
+	if w.diagnostic != nil && w.diagnostic.ErrorSource == "" {
+		w.diagnostic.ErrorSource = "plugin_local_request"
+	}
 	return w.json(status, object{"error": object{"type": "invalid_request_error", "code": code, "message": message}}, nil)
 }
 
@@ -101,6 +113,13 @@ func (s *Server) Forward(stream pluginv1.TransportPlugin_ForwardServer) (result 
 	defer func() {
 		if result != nil && d.Error == "" {
 			d.Error = "客户端传输中断，响应未完整交付"
+			d.ErrorSource = "client_transport"
+			if stream.Context().Err() != nil {
+				d.ErrorSource = "request_canceled"
+				if errors.Is(stream.Context().Err(), context.DeadlineExceeded) {
+					d.ErrorSource = "request_timeout_or_canceled"
+				}
+			}
 		}
 		s.finishDiagnostic(d)
 		if isRouteProbe {
@@ -120,12 +139,22 @@ func (s *Server) Forward(stream pluginv1.TransportPlugin_ForwardServer) (result 
 	}
 	ctx, cancel := context.WithTimeout(stream.Context(), time.Duration(cfg.TimeoutSeconds)*time.Second)
 	defer cancel()
+	d.Replay = &replayDiagnostic{}
+	ctx = context.WithValue(ctx, replayDiagnosticContextKey{}, d.Replay)
 	d.input(buffer.Bytes())
 	d.Stage = "prepare"
 	plan, err := s.prepare(ctx, buffer.Bytes(), start.AccountId, headersFromProto(start.Headers), cfg)
 	if err != nil {
+		if errors.Is(err, errModelNotAllowed) {
+			d.ErrorSource = "plugin_local_config"
+			return w.reject(400, "bps_model_not_allowed", err.Error())
+		}
+		if d.Replay.Failure != "" {
+			d.ErrorSource = "plugin_history"
+		}
 		return w.reject(400, "bps_invalid_request", err.Error())
 	}
+	plan.tools.observeRelay = d.observeRelay
 	d.catalog(plan.tools)
 	d.ReasoningEffort = str(plan.body, "reasoning_effort")
 	d.Stage = "identity"
@@ -144,6 +173,7 @@ func (s *Server) Forward(stream pluginv1.TransportPlugin_ForwardServer) (result 
 		d.Attachment = report
 		d.UpstreamImages, _ = summarizeImages(plan.body)
 		if err != nil {
+			d.ErrorSource = "attachment"
 			var failure *attachmentError
 			if errors.As(err, &failure) {
 				if failure.status != 0 {
@@ -164,8 +194,13 @@ func (s *Server) Forward(stream pluginv1.TransportPlugin_ForwardServer) (result 
 	req.Header = headers
 	d.Stage = "connect"
 	// Once RoundTrip is entered, conservatively prohibit host account replay.
+	d.ResponsesStarted = true
 	resp, err := transport.RoundTrip(req)
 	if err != nil {
+		d.ErrorSource = "upstream_transport"
+		if ctx.Err() != nil {
+			d.ErrorSource = "request_timeout_or_canceled"
+		}
 		return w.fail("bps_transport", networkError(ctx, err), true)
 	}
 	defer resp.Body.Close()
@@ -173,6 +208,7 @@ func (s *Server) Forward(stream pluginv1.TransportPlugin_ForwardServer) (result 
 	d.ContentType, _, _ = mime.ParseMediaType(resp.Header.Get("Content-Type"))
 	d.RequestID = redactProbeText(resp.Header.Get("X-Request-Id"), headers, "")
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		d.ErrorSource = "upstream_http"
 		d.UpstreamError, d.UpstreamErrorState = readUpstreamDiagnostic(resp.Body, headers, buffer.Bytes(), plan.body)
 		return w.json(resp.StatusCode, object{"error": object{"type": "bps_upstream_error", "code": fmt.Sprintf("bps_http_%d", resp.StatusCode), "message": upstreamMessage(resp.StatusCode)}}, responseHeaders(resp.Header))
 	}
@@ -193,6 +229,14 @@ func (s *Server) Forward(stream pluginv1.TransportPlugin_ForwardServer) (result 
 	relay := newRelay(ctx, plan, emit)
 	relay.observe = d.observe
 	if err := relay.consume(resp); err != nil {
+		d.ErrorSource = "response_conversion"
+		var decodeErr *relayDecodeError
+		if errors.As(err, &decodeErr) {
+			d.ErrorSource = "tool_relay"
+		}
+		if ctx.Err() != nil {
+			d.ErrorSource = "request_timeout_or_canceled"
+		}
 		return w.fail("bps_response", err.Error(), true)
 	}
 	d.Terminal = relay.terminal
@@ -201,6 +245,7 @@ func (s *Server) Forward(stream pluginv1.TransportPlugin_ForwardServer) (result 
 		d.Stage = "completed"
 	} else {
 		d.Error = "BPS 返回 " + relay.terminal
+		d.ErrorSource = "upstream_response"
 	}
 	if !plan.stream {
 		return w.json(200, relay.response, responseHeaders(resp.Header))
@@ -343,15 +388,22 @@ func (s *Server) probeRound(ctx context.Context, p *Probe, cfg Config, source ob
 	p.HTTPStatus, p.RequestBytes = 0, 0
 	p.RequestID, p.ContentType, p.UpstreamError = "", "", ""
 	p.ResponseID, p.ReturnedModel, p.Usage, p.Attachment = "", "", nil, nil
+	p.Relay, p.Replay = nil, &replayDiagnostic{}
+	ctx = context.WithValue(ctx, replayDiagnosticContextKey{}, p.Replay)
 	p.Stage = "prepare"
 	s.publishProbe(p)
 	defer func() {
-		p.Rounds = append(p.Rounds, probeRoundResult{Round: p.Round, HTTPStatus: p.HTTPStatus, RequestID: p.RequestID, ResponseID: p.ResponseID, ReturnedModel: p.ReturnedModel, LatencyMS: time.Since(started).Milliseconds(), Usage: p.Usage})
+		p.Rounds = append(p.Rounds, probeRoundResult{Round: p.Round, HTTPStatus: p.HTTPStatus, RequestID: p.RequestID, ResponseID: p.ResponseID, ReturnedModel: p.ReturnedModel, LatencyMS: time.Since(started).Milliseconds(), Usage: p.Usage, Relay: p.Relay, Replay: p.Replay})
 		s.publishProbe(p)
 	}()
 	plan, err := s.prepare(ctx, encoded(source), p.AccountID, h, cfg)
 	if err != nil {
 		return nil, err
+	}
+	plan.tools.observeRelay = func(value relayDiagnostic) {
+		if len(p.Relay) < 16 {
+			p.Relay = append(p.Relay, value)
+		}
 	}
 	if cfg.ImageTransport == "attachment" {
 		p.Stage = "upload"

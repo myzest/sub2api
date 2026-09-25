@@ -52,6 +52,8 @@ type Probe struct {
 	ToolCalls         int                `json:"tool_calls,omitempty"`
 	ToolExpected      string             `json:"tool_expected,omitempty"`
 	ToolReply         string             `json:"tool_reply,omitempty"`
+	Relay             []relayDiagnostic  `json:"relay,omitempty"`
+	Replay            *replayDiagnostic  `json:"replay,omitempty"`
 	RouteDiagnosticID string             `json:"route_diagnostic_id,omitempty"`
 }
 type Snapshot struct {
@@ -293,7 +295,7 @@ func (s *Server) runProbe(p Probe, cfg Config) {
 		p.Message = "图片路由探测通过：模拟桌面请求经 Forward 路由返回了图中六位数字；真实拖图请求请查看独立图片路由诊断"
 	}
 	if p.Kind == "tools" {
-		p.Message = "工具探测通过：命名空间工具调用、转换及模拟结果的第二轮回放完成；不代表桌面端已实际执行本地工具"
+		p.Message = "工具探测通过：custom 多行输入、function 嵌套参数及三轮模拟结果回放完成；不代表桌面端已实际执行本地工具"
 	}
 	if err != nil {
 		p.State, p.Message = "failed", err.Error()

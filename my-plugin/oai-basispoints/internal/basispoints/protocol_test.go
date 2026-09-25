@@ -179,13 +179,19 @@ func TestTwoTurnNativeReplayAndIsolation(t *testing.T) {
 	s2.host = s.host
 	mustPlan(t, s2, source, 7)
 	for _, account := range []int64{8, 9} {
-		if _, err := s.prepare(context.Background(), encoded(source), account, nil, s.config()); err == nil {
-			t.Fatal("cross-account replay accepted")
+		other := mustPlan(t, s, source, account)
+		if _, err := other.store.load(context.Background(), str(call, "call_id")); err == nil {
+			t.Fatal("cross-account native KV lookup accepted")
+		}
+		items := other.body["input"].([]any)
+		if items[len(items)-2].(object)["opaque_server_state"] != nil {
+			t.Fatal("imported history must not retrieve another account's native state")
 		}
 	}
 	source["prompt_cache_key"] = "other-session"
-	if _, err := s.prepare(context.Background(), encoded(source), 7, nil, s.config()); err == nil {
-		t.Fatal("cross-session replay accepted")
+	other := mustPlan(t, s, source, 7)
+	if _, err := other.store.load(context.Background(), str(call, "call_id")); err == nil {
+		t.Fatal("cross-session native KV lookup accepted")
 	}
 	source["prompt_cache_key"] = "session-one"
 	replay["arguments"] = `{"cmd":"different command"}`

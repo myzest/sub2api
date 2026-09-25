@@ -20,6 +20,8 @@ type requestPlan struct {
 	store  replayStore
 }
 
+var errModelNotAllowed = errors.New("模型不在 BPS 允许列表中；这是插件本地配置拒绝，未发送 BPS，不会自动替换模型")
+
 func (s *Server) prepare(ctx context.Context, raw []byte, accountID int64, headers http.Header, cfg Config) (*requestPlan, error) {
 	source, err := decodeObject(raw)
 	if err != nil {
@@ -27,7 +29,7 @@ func (s *Server) prepare(ctx context.Context, raw []byte, accountID int64, heade
 	}
 	model := str(source, "model")
 	if !slices.Contains(cfg.Models, model) {
-		return nil, errors.New("模型不在 BPS 允许列表中；不会自动替换模型")
+		return nil, errModelNotAllowed
 	}
 	if str(source, "previous_response_id") != "" || source["conversation"] != nil {
 		return nil, errors.New("BPS 使用 store:false，请发送完整 input 历史；不支持 previous_response_id/conversation")
@@ -75,7 +77,7 @@ func (s *Server) prepare(ctx context.Context, raw []byte, accountID int64, heade
 	if err != nil {
 		return nil, err
 	}
-	store := replayStore{s.hostClient(), accountID, conversationScope(source, headers), cfg.ReplayTTLSeconds}
+	store := replayStore{host: s.hostClient(), accountID: accountID, scope: conversationScope(source, headers), ttl: cfg.ReplayTTLSeconds, diagnostic: replayDiagnosticFromContext(ctx)}
 	if len(tools.tools) > 0 && store.host == nil {
 		return nil, errors.New("工具调用需要宿主 HostService v2")
 	}

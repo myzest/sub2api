@@ -11,7 +11,7 @@ import (
 
 const (
 	PluginID    = "local.sub2api.oai-basispoints"
-	Version     = "0.1.9"
+	Version     = "0.1.10"
 	Capability  = "openai.oauth.outbound_transport.v1"
 	bpsURL      = "https://bps.openai.com/basispoints/api/responses"
 	maxBody     = 8 << 20
@@ -156,6 +156,9 @@ func (c Config) routes(id int64) bool { return c.RouteEnabled && slices.Contains
 
 type object = map[string]any
 
+var errDuplicateJSONKey = errors.New("duplicate key")
+var errJSONNesting = errors.New("JSON nesting limit")
+
 // Reject duplicate keys as well as trailing data. Ambiguous tool envelopes must
 // never acquire different meanings in the validator and the downstream client.
 func decodeJSON(raw []byte) (any, error) {
@@ -173,7 +176,7 @@ func decodeJSON(raw []byte) (any, error) {
 
 func decodeValue(d *json.Decoder, depth int) (any, error) {
 	if depth > 100 {
-		return nil, errors.New("JSON nesting limit")
+		return nil, errJSONNesting
 	}
 	t, err := d.Token()
 	if err != nil {
@@ -196,7 +199,7 @@ func decodeValue(d *json.Decoder, depth int) (any, error) {
 				return nil, errors.New("invalid key")
 			}
 			if _, exists := m[key]; exists {
-				return nil, errors.New("duplicate key")
+				return nil, errDuplicateJSONKey
 			}
 			m[key], err = decodeValue(d, depth+1)
 			if err != nil {

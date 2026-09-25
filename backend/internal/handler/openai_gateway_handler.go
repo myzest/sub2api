@@ -951,9 +951,14 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 					zap.Int64("account_id", account.ID),
 					zap.Bool("fallback_error_response_written", wroteFallback),
 					zap.Bool("upstream_error_response_already_written", upstreamErrorAlreadyCommunicated),
+					zap.Bool("request_context_done", c.Request.Context().Err() != nil),
 					zap.Error(err),
 				}
 				submitResponsesUsage(result)
+				if c.Request.Context().Err() != nil && (errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)) {
+					reqLog.Warn("openai.forward_canceled", fields...)
+					return
+				}
 				if shouldLogOpenAIForwardFailureAsWarn(c, wroteFallback) {
 					reqLog.Warn("openai.forward_failed", fields...)
 					return
@@ -2368,6 +2373,8 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 		closeStatus, closeReason := summarizeWSCloseErrorForLog(err)
 		reqLog.Warn("openai.websocket_read_first_message_failed",
 			zap.Error(err),
+			zap.String("failure_stage", "client_first_message"),
+			zap.Bool("plugin_invoked", false),
 			zap.String("client_ip", clientIP),
 			zap.String("close_status", closeStatus),
 			zap.String("close_reason", closeReason),
@@ -2652,10 +2659,15 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 			requestPlatform,
 		)
 		if err != nil {
-			reqLog.Warn("openai.websocket_account_select_failed",
+			fields := []zap.Field{
 				zap.Error(openAICompatibleSelectionErrorForLog(err, requestPlatform)),
 				zap.Int("excluded_account_count", len(failedAccountIDs)),
-			)
+				zap.Int("switch_count", switchCount),
+			}
+			if lastFailoverErr != nil {
+				fields = append(fields, zap.Int("last_failover_status", lastFailoverErr.StatusCode))
+			}
+			reqLog.Warn("openai.websocket_account_select_failed", fields...)
 			if lastFailoverErr != nil {
 				closeOpenAIWSFailoverExhausted(c, wsConn, lastFailoverErr)
 			} else {

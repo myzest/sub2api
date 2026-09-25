@@ -20,6 +20,28 @@ import (
 var handlePattern = regexp.MustCompile(`^(?:fc_|ctc_|call_)?bp_([a-f0-9]{32})$`)
 var inputTypePattern = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_]{0,63}$`)
 
+type replayDiagnostic struct {
+	ScopeFingerprint string `json:"scope_fingerprint,omitempty"`
+	NativeHits       int    `json:"native_hits"`
+	NativeSaved      int    `json:"native_saved"`
+	Missing          int    `json:"missing"`
+	Rebuilt          int    `json:"rebuilt"`
+	Imported         int    `json:"imported"`
+	Failure          string `json:"failure,omitempty"`
+}
+type replayDiagnosticContextKey struct{}
+
+func replayDiagnosticFromContext(ctx context.Context) *replayDiagnostic {
+	d, _ := ctx.Value(replayDiagnosticContextKey{}).(*replayDiagnostic)
+	return d
+}
+
+type replayError struct{ kind, message string }
+
+func (e *replayError) Error() string { return e.message }
+
+var errReplayMissing = &replayError{"missing", "当前账号和会话范围内未找到原生工具记录；可能是范围变化、存储清理或过期；需要完整调用及对应结果才能转换历史"}
+
 type replayRecord struct {
 	AccountID int64  `json:"account_id"`
 	Scope     string `json:"scope"`
@@ -28,10 +50,11 @@ type replayRecord struct {
 	Client    object `json:"client"`
 }
 type replayStore struct {
-	host      pluginv1.HostServiceClient
-	accountID int64
-	scope     string
-	ttl       int
+	host       pluginv1.HostServiceClient
+	accountID  int64
+	scope      string
+	ttl        int
+	diagnostic *replayDiagnostic
 }
 
 func digest(v any) string { sum := sha256.Sum256(encoded(v)); return hex.EncodeToString(sum[:]) }
@@ -97,6 +120,9 @@ func (r replayStore) save(ctx context.Context, native, client object) error {
 	if err != nil {
 		return errors.New("保存原生工具调用失败，未向客户端释放工具")
 	}
+	if r.diagnostic != nil {
+		r.diagnostic.NativeSaved++
+	}
 	return nil
 }
 func (r replayStore) load(ctx context.Context, handle string) (*replayRecord, error) {
@@ -111,20 +137,32 @@ func (r replayStore) load(ctx context.Context, handle string) (*replayRecord, er
 	defer cancel()
 	v, err := r.host.KVGet(ctx, &pluginv1.KVGetRequest{Namespace: "replay-v1", Key: key})
 	if err != nil {
-		return nil, errors.New("读取工具回放失败")
+		return nil, &replayError{"storage_error", "读取工具回放存储失败；不会当作记录缺失转换历史"}
 	}
 	if !v.GetFound() {
-		return nil, errors.New("工具回放不存在或已过期；请保持账号、模型和完整会话历史，必要时开启新会话")
+		if r.diagnostic != nil {
+			r.diagnostic.Missing++
+		}
+		return nil, errReplayMissing
 	}
 	var record replayRecord
 	decoder := json.NewDecoder(bytes.NewReader(v.Value))
 	decoder.UseNumber()
-	if len(v.Value) > 256<<10 || decoder.Decode(&record) != nil || decoder.Decode(new(any)) != io.EOF || record.AccountID != r.accountID || record.Scope != r.scope || record.ExpiresAt <= time.Now().Unix() || str(record.Native, "call_id") == "" || record.Client == nil {
-		return nil, errors.New("工具回放无效或已过期")
+	if len(v.Value) > 256<<10 || decoder.Decode(&record) != nil || decoder.Decode(new(any)) != io.EOF || str(record.Native, "call_id") == "" || record.Client == nil {
+		return nil, &replayError{"invalid_record", "工具回放记录损坏或缺少必要字段"}
+	}
+	if record.AccountID != r.accountID || record.Scope != r.scope {
+		return nil, &replayError{"scope_mismatch", "工具回放记录与当前账号或会话范围不匹配"}
+	}
+	if record.ExpiresAt <= time.Now().Unix() {
+		return nil, &replayError{"expired_record", "工具回放记录已超过保留期限；未使用过期原生状态"}
 	}
 	wantKey, err := r.key(str(record.Client, "call_id"))
 	if err != nil || wantKey != key {
-		return nil, errors.New("工具回放身份不匹配")
+		return nil, &replayError{"identity_mismatch", "工具回放身份不匹配"}
+	}
+	if r.diagnostic != nil {
+		r.diagnostic.NativeHits++
 	}
 	return &record, nil
 }
@@ -150,10 +188,24 @@ func sameCall(a, b object) bool {
 	return err == nil && digest(x) == digest(y)
 }
 
-func (r replayStore) restore(ctx context.Context, input []any) ([]any, error) {
+func (r replayStore) restore(ctx context.Context, input []any) (restored []any, resultErr error) {
+	if r.diagnostic != nil {
+		r.diagnostic.ScopeFingerprint = r.scope[:min(len(r.scope), 16)]
+		defer func() {
+			if resultErr != nil {
+				r.diagnostic.Failure = "invalid_history"
+				var detail *replayError
+				if errors.As(resultErr, &detail) {
+					r.diagnostic.Failure = detail.kind
+				}
+			}
+		}()
+	}
 	output := []any{}
 	loaded := map[string]*replayRecord{}
 	calls, results := map[string]bool{}, map[string]bool{}
+	rebuiltKeys := map[string]bool{}
+	rebuilt, imported := 0, 0
 	for index, v := range input {
 		item, ok := v.(object)
 		if !ok {
@@ -188,8 +240,21 @@ func (r replayStore) restore(ctx context.Context, input []any) ([]any, error) {
 				var native object
 				native, err = historicalTransportCall(item)
 				record = &replayRecord{Native: native, Client: item}
+				imported++
 			} else {
 				record, err = r.load(ctx, handle)
+				if errors.Is(err, errReplayMissing) && isCall {
+					// Same fallback as complete external history in both references.
+					// Only use the supplied payload, never another scope's KV.
+					// The final pairing check below rejects missing results.
+					var native object
+					native, err = historicalTransportCall(item)
+					record = &replayRecord{Native: native, Client: item}
+					if err == nil {
+						rebuilt++
+						rebuiltKeys[key] = true
+					}
+				}
 			}
 			if err != nil {
 				return nil, inputError(index, item, err)
@@ -203,6 +268,9 @@ func (r replayStore) restore(ctx context.Context, input []any) ([]any, error) {
 			calls[key] = true
 			output = append(output, record.Native)
 		} else {
+			if value, present := item["output"]; rebuiltKeys[key] && (!present || value == nil) {
+				return nil, inputError(index, item, &replayError{"incomplete_history", "原生记录缺失，历史结果必须包含原始 output 字段"})
+			}
 			if results[key] {
 				return nil, inputError(index, item, errors.New("工具结果重复"))
 			}
@@ -231,6 +299,9 @@ func (r replayStore) restore(ctx context.Context, input []any) ([]any, error) {
 		if !results[key] {
 			return nil, errors.New("缺少对应工具执行结果；切换通道需发送完整历史，不会重新执行旧调用")
 		}
+	}
+	if r.diagnostic != nil {
+		r.diagnostic.Rebuilt, r.diagnostic.Imported = rebuilt, imported
 	}
 	return output, nil
 }

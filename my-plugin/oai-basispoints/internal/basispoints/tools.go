@@ -14,12 +14,13 @@ type toolSpec struct {
 	schema                     *jsonschema.Schema
 }
 type toolCatalog struct {
-	tools     map[string]toolSpec
-	entries   []any
-	entriesAt map[int][]any
-	required  bool
-	forced    string
-	parallel  bool
+	tools        map[string]toolSpec
+	entries      []any
+	entriesAt    map[int][]any
+	required     bool
+	forced       string
+	parallel     bool
+	observeRelay func(relayDiagnostic)
 }
 type noExternalSchemas struct{}
 
@@ -212,6 +213,11 @@ Use the native run_officejs function solely as a relay envelope containing exact
 Client tool catalog:
 `
 	text += string(encoded(c.entriesAt[-1]))
+	text += "\nEncoding example only (replace EXACT_CATALOG_NAME with a declared custom tool): " + string(encoded(object{
+		"summary": "Call client tool", "extended_summary": "Relay one declared tool", "destructive": false, "references": []any{},
+		"code": string(encoded(object{"name": "EXACT_CATALOG_NAME", "input": "const path = \"C:\\\\workspace\\\\file.txt\";\nconst quoted = \"\\\"hello\\\"\";"})),
+	}))
+	text += "\nSerialize the inner object once, then JSON-escape that string as the outer code value. Preserve raw custom input including every newline, quote and backslash. No Markdown fences, assignments or surrounding prose in code. The example is not an additional tool declaration."
 	if !c.parallel {
 		text += "\nInvoke at most one catalog tool in this response."
 	}
@@ -230,21 +236,12 @@ func (c *toolCatalog) convert(native object) (object, error) {
 	if str(native, "call_id") == "" || str(native, "id") == "" {
 		return nil, errors.New("BPS 工具调用缺少原生身份，不能可靠回放")
 	}
-	args, err := decodeObject([]byte(str(native, "arguments")))
-	if err != nil {
-		return nil, errors.New("run_officejs.arguments 不是有效 JSON")
-	}
-	var inner object
-	switch code := args["code"].(type) {
-	case string:
-		inner, err = decodeObject([]byte(code))
-	case object:
-		inner = code
-	default:
-		err = errors.New("invalid code")
+	inner, diagnostic, err := decodeRelayEnvelope(native)
+	if c.observeRelay != nil {
+		c.observeRelay(diagnostic)
 	}
 	if err != nil {
-		return nil, errors.New("run_officejs.code 必须为一个严格 JSON 对象；不会执行或修复脚本")
+		return nil, err
 	}
 	for key := range inner {
 		if key != "name" && key != "tool" && key != "arguments" && key != "args" && key != "input" {

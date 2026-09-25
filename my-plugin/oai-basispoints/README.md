@@ -2,14 +2,14 @@
 
 独立的 Sub2API `.s2plugin` 插件，使用已有 OpenAI OAuth 账号，将选定账号的 Responses 请求转换为 BPS 协议。源码和生成文件都在此目录；不需要二改 Sub2API 主程序。
 
-这是 **0.1.9 源码审查修复版本**。修复空 custom input 与错误类型混同、重复前缀误判外部历史、多图上传显示过期 HTTP 状态及附件错误脱敏不一致的问题。保留 0.1.8 的固定图片扩展名、JPEG/PNG 探测和完整外部工具历史转换。真实识图和旧任务续接仍由用户验收。逐项来源和边界见 [FIELD_MAPPING.md](FIELD_MAPPING.md)，交付记录见 [VALIDATION.md](VALIDATION.md)。
+这是 **0.1.10 工具链路兼容与诊断版本**。增加完整 JSON 围栏、最多两层重复原生信封的兼容；原生回放 KV 未命中时，允许根据客户端提供的完整调用及结果转换历史。新增解析失败类别、错误来源和回放范围指纹，工具探测升级为三轮。保留 0.1.9 修复。真实桌面任务仍由用户验收；本轮未运行功能测试或真实账号探测。源码依据见 [FIELD_MAPPING.md](FIELD_MAPPING.md)，交付记录见 [VALIDATION.md](VALIDATION.md)。
 
 ## 安装
 
 适用宿主：本工作区对应 fork 的插件机制，Plugin Protocol / Transport API / UI Bridge v1，**HostService v2**。清单声明 `>=0.2.8 <0.3.0`，版本号本身不能替代这些接口要求；没有在你的服务器镜像上验收。
 
 1. 将 `dist/trusted-publisher.yaml` 中公钥条目合并到服务器已有配置的 `plugins.trusted_publishers`，保留其他发布者，保持 `allow_unsigned: false`。首次添加公钥后重启 Sub2API。
-2. 在插件管理中导入 `dist/oai-basispoints-0.1.9.s2plugin`。包内包含 Linux amd64、Linux arm64、macOS arm64 运行文件。
+2. 在插件管理中导入 `dist/oai-basispoints-0.1.10.s2plugin`。包内包含 Linux amd64、Linux arm64、macOS arm64 运行文件。
 3. 启用本插件。如果已有 OpenAI OAuth 出站插件处于启用状态，先停用它：宿主的 `openai.oauth.outbound_transport.v1` 只有一个启用槽位，不能与 GPT Inspector 同时占用。
 4. 将宿主此插件能力的灰度比例设为 **100%**，再通过本插件的账号白名单控制 BPS 路由。比例低于 100% 时，部分选定账号可能根本到不了插件。
 5. 打开插件设置，刷新账号。在保持 BPS 路由关闭的情况下，选一个账号、模型和 effort，点击“保存并探测文本”。图片、工具探测也在这里；每项总共最多等待 120 秒，只有点击探测才发上游请求。
@@ -49,8 +49,8 @@
 | 输入 | 普通项保留 type、role、phase、content 和扩展字段；只删除客户端专用 `internal_chat_message_metadata_passthrough`，reasoning、引用和工具回放另行处理 |
 | 流式 | 沿用客户端 stream；普通 SSE 事件、内容和扩展字段转发，工具完成校验后生成客户端工具事件。由于工具事件被重建，sequence_number 重新连续编号 |
 | 工具 | 从顶层 tools 与 input[].additional_tools 提取 function/custom、namespace；支持 allowed_tools；完整 schema / custom format 放入提示，function 参数用 JSON Schema 校验；遵守 parallel_tool_calls:false |
-| 原生信封 | 仅接受 `run_officejs` / `functions.run_officejs` 的严格 JSON `code`，解析 name/arguments/input 或 tool/args；不执行 JS、不从任意文本猜测工具、不自动修补 JSON |
-| 工具回放 | 插件句柄通过 KV 恢复完整原生 item；外部完整调用/结果按参考 fallback 转为历史 run_officejs 输入，不执行旧调用 |
+| 原生信封 | 接受 `run_officejs` / `functions.run_officejs` 的单 JSON 对象，可去除完整单一 JSON/无语言围栏、解开最多两层 name/arguments 原生信封；保留重复键、尾随内容、工具目录和 Schema 校验；不修非法转义、不执行 JS |
+| 工具回放 | KV 命中时校验并恢复原生 item；KV 未命中且有完整调用/结果时，按参考 fallback 转成历史输入；不跨范围读 KV、不执行旧调用 |
 | 终态 | 保留 failed/incomplete、usage、incomplete_details 与扩展字段；缺少终态、非法/重复工具、违反并行限制或原生身份不一致均报错，不伪装 completed |
 | 其他账号 | 按原 URL、Host、headers、body、proxy 转发，使用标准 Go HTTP/TLS；不会复现宿主定制 TLS 指纹 |
 | Token / 错误 | Token 只在内存用于请求；HTTP 错误保留状态码及限流 headers，并附诊断 ID；后台采集受限的脱敏校验信息，不透传原始错误体 |
@@ -71,7 +71,9 @@
 
 ## 回放与资源限制
 
-工具句柄含 128 位随机值；KV key 绑定 sub2api account ID、模型、出站会话标识与首条用户消息指纹。本插件句柄的缓存缺失、过期、参数被修改或账号/模型变化时仍明确失败，不用外部历史转换绕过这些检查。
+工具句柄含 128 位随机值；KV key 绑定 sub2api account ID、模型、出站会话标识与首条用户消息指纹。原生记录仍只在同范围内读取；命中时核对调用内容、身份和过期时间，不跨账号或会话搜索记录。
+
+0.1.10 修正对 KV 未命中的无条件拒绝。即使用户没有主动切换任务，宿主自动选账号、会话键或首条上下文变化也会导致未命中。此时仅依据客户端本次提供的完整调用及配对结果构造历史 run_officejs 输入，与参考项目的 fallback 对应；不恢复原生 opaque 状态、不写新回放记录、不重新执行命令。结果必须含 output 字段；孤立结果、缺失结果、重复调用/结果、非法参数仍拒绝。已找到但损坏、身份不符、内容被修改或明确过期的记录，以及存储读取错误，不按未命中处理。跨模型加密推理状态和文件 ID 的可移植性不在此修复范围。
 
 外部历史指不含本插件 `bp_` 标记的 function/custom 调用：参考 CPA `fallbackTransportCall` 与 Excel `_fallback_transport_call`，按完整工具名（包括 namespace）、原始字符串 input 或 JSON 对象 arguments 构造历史 run_officejs 信封，并配对原 call_id 的结果。它只重建本次请求已提供的历史，不读取其他账号 KV、不保存新执行状态，也不会把旧调用发送给客户端执行。工具已退出本轮目录或 tool_choice=none 不妨碍历史重建；这些限制仍约束新输出调用。缺失 ID/名称/参数、结果早于调用、重复或缺少结果均明确失败，不猜测参数、不丢弃历史。原始 BPS 服务端私有状态无法由普通客户端历史还原，跨通道续接并非无条件保证。
 
@@ -85,9 +87,9 @@
 
 ## 你可以这样验收
 
-1. 选原有账号和模型，依次点击文本、图片、工具探测。文本/图片各一次模型请求，附件模式图片另含上传；工具最多两次模型请求，均消耗账号额度。
+1. 选原有账号和模型，依次点击文本、图片、工具探测。文本/图片各一次模型请求，附件模式图片另含上传；工具最多三次模型请求，均消耗账号额度。工具探测先逐字核对 custom 多行输入，再核对 function 嵌套参数和大整数，最后用 tool_choice=none 核对两次模拟结果；不执行这些样本文本。
 2. 图片探测生成六位随机数字图。默认 JPEG，可手动选择 PNG 对照；每次点击只发所选格式的一次模型请求。答案不放入提示词、文件名或图片元数据，只在像素和本地比对状态中。页面显示格式、图片、预期/实际回复、detail、附件与 Responses 各自 HTTP、阶段及脱敏错误。默认 high，可手动比较 auto/low/original；不自动回退。回答不符不等于完全不支持图片。
-3. 工具探测在 `input[].additional_tools` 声明虚拟的 namespaced custom 工具 `diagnostics.read_probe`，要求原始 input 为 `probe.txt`；经同一工具转换与 KV 记录后，模拟返回随机校验值，第二轮禁用工具并要求读回此值。它不访问服务器或你的桌面文件，也不证明真实客户端执行成功。
+3. 工具探测在 `input[].additional_tools` 声明虚拟的 `diagnostics.read_probe`（custom）及 `diagnostics.echo_probe`（function），通过同一转换与 KV 链路完成两次调用，第三轮禁用工具并核对两次模拟结果。它不访问服务器或你的桌面文件，也不证明真实客户端执行成功。
 4. 从 Codex 新任务发送“列出当前项目文件，并读取其中一个文件”，观察客户端真实工具记录；随后在插件中刷新“最近路由请求”。检查声明来源是否有 `input.additional_tools`、目录是否有 `exec` / 文件工具或 `collaboration.spawn_agent`（以客户端实际名称为准）。诊断另显示转换前的 BPS 原生工具名称；有目录但零调用时，结合终态/错误判断模型行为或转换问题。
 5. 拖入图片，确认实际桌面请求成功；再验收命令执行、文件修改、工具回放、Skill 文件读取、取消、代理及关闭路由后的普通转发。
 
@@ -102,6 +104,14 @@
 0.1.8 附件摘要另显示最多 16 张图的上游位置、插件生成的文件名、MIME、原图字节数和上传/复用状态，不记录原始文件名。旧任务诊断增加历史工具项计数与 ID 分类（插件/外部/缺失/异常），不显示真实 call_id 或参数。升级后首次发同图应显示新上传以及 `image.jpg / image/jpeg`；如果仍报 `got none`，该记录可区分文件名修正是否生效，不能仅凭本次代码修正宣称远端问题已解决。
 
 0.1.9 增加附件上传尝试次数与逐图 HTTP 状态。汇总 HTTP、Content-Type、Request ID 和错误采集状态仅表示最近一次上传尝试：前图成功、后图取消或连接失败时不会沿用之前的 HTTP 200；有缓存命中也不会掩盖后续上传失败。仅命中缓存时显示“缓存复用，无上传请求”。附件非 2xx 与 Responses 使用同一套受限脱敏规则；缺少错误详情时显示读取失败、超限、非 JSON 等采集原因。
+
+0.1.10 的“工具信封诊断”记录类型、字节数、JSON 错误类别/偏移、围栏处理和解包层数；偏移以当前层去除外围空白/围栏后交给解码器的内容为基准，不记录参数正文。解析成功仍要通过目录、Schema、tool_choice 和回放保存校验。“回放范围指纹”可用于对照同一任务各轮范围是否变化，账号单独显示；KV 未命中本身不能证明过期。“Responses HTTP”是上游状态，“客户端 HTTP”是已发给宿主的状态；流式 200 后仍可能发生工具转换错误。
+
+模型白名单拒绝使用 bps_model_not_allowed，并标明 plugin_local_config、responses_started=false。gpt-6-sol 与 gpt-5.6-sol 不自动互换，也不因本次修复加入默认列表。其他错误分别标识本地请求、历史恢复、图片附件、上游 HTTP、信封解析、响应转换及取消/超时。
+
+本次另有独立宿主源码修正：正常 Redis 缓存 miss 不再作为错误；日志区分传输响应错误、请求取消、WS 首帧阶段，并为选号失败补充上一失败状态。插件包不包含宿主二进制，这些宿主变化需要重新构建并部署 Sub2API 才会生效；插件 0.1.10 不依赖它们。未改变 WS 超时、账号调度或重试策略。
+
+发行 ZIP 中的 `sub2api-bps-0.1.10-host.patch` 单独包含上述三处宿主文件改动，基于工作区提交 `089fe4ea1`。应用到其他 fork 前应检查差异；仅导入 `.s2plugin` 不会应用此补丁。
 
 状态查询串行处理，短暂失败后每 5 秒重试只读查询，不重发探测。刷新账号先读取服务器当前配置，保留本窗口未保存的表单；检测到配置变化会提示。宿主没有条件保存接口，跨窗口同时保存仍无法原子协调，请避免同时修改多个设置窗口。
 

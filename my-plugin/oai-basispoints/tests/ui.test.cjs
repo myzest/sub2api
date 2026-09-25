@@ -21,6 +21,14 @@ test('cached images do not hide a later upload without an HTTP response',()=>{
   assert.doesNotMatch(text,/缓存复用，无上传请求/);
   assert.match(text,/上传失败 · 未收到上传响应/);
 });
+test('diagnostic separates local rejection, relay failure and recovered history',()=>{
+  const local=model.requestText({account_id:7,model:'gpt-6-sol',stage:'prepare',error_source:'plugin_local_config',responses_started:false,client_http_status:400,error:'bps_model_not_allowed'});
+  assert.match(local,/插件本地模型配置/);assert.match(local,/Responses 发送阶段：尚未开始/);
+  const failed=model.requestText({account_id:7,http_status:200,client_http_status:200,error_source:'tool_relay',error:'decode failed',relay:[{state:'rejected',unwrapped:1,error_kind:'invalid_escape',fields:[{layer:1,field:'code',type:'string',bytes:90,error_kind:'invalid_escape',error_offset:20}]}]});
+  assert.match(failed,/HTTP 200 不代表完成/);assert.match(failed,/invalid_escape/);assert.match(failed,/字节偏移 20/);
+  const recovered=model.requestText({account_id:7,replay:{scope_fingerprint:'aabbcc',native_hits:0,missing:1,rebuilt:1}});
+  assert.match(recovered,/缺失原生记录 1/);assert.match(recovered,/未重新执行旧工具/);
+});
 test('bridge rejects forged messages and resolves only the matching parent/token/request',async()=>{
   const handlers={},sent=[],timers=new Map();let timerID=0;
   const parent={postMessage:(message)=>sent.push(message)};

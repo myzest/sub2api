@@ -2,8 +2,12 @@ package basispoints
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
+
+	"google.golang.org/grpc"
+	pluginv1 "local.sub2api/oai-basispoints/internal/pluginapi"
 )
 
 func TestReplayEmptyCustomInputRequiresOriginalString(t *testing.T) {
@@ -48,6 +52,50 @@ func TestReplayEmptyCustomInputRequiresOriginalString(t *testing.T) {
 	source["input"] = []any{message("user", "hello"), replay, object{"type": "custom_tool_call_output", "call_id": call["call_id"], "output": "done"}}
 	if _, err := s.prepare(context.Background(), encoded(source), 7, nil, s.config()); err == nil {
 		t.Fatal("non-string namespace matched the original absent namespace")
+	}
+}
+
+type unavailableReplayHost struct{ *fakeHost }
+
+func (f unavailableReplayHost) KVGet(context.Context, *pluginv1.KVGetRequest, ...grpc.CallOption) (*pluginv1.KVGetResponse, error) {
+	return nil, errors.New("fixture storage offline")
+}
+
+func TestMissingNativeRecordRequiresCompleteHistoryAndDoesNotWriteKV(t *testing.T) {
+	handle := "ctc_bp_" + strings.Repeat("b", 32)
+	call := object{"type": "custom_tool_call", "name": "exec", "namespace": "workspace", "call_id": handle, "input": toolProbeInput}
+	result := object{"type": "custom_tool_call_output", "call_id": "call_" + strings.TrimPrefix(handle, "ctc_"), "output": "already executed"}
+	s := fixtureServer()
+	source := fixtureRequest()
+	source["tool_choice"] = "none"
+	source["input"] = []any{message("user", "hello"), call, result}
+	d := &replayDiagnostic{}
+	ctx := context.WithValue(context.Background(), replayDiagnosticContextKey{}, d)
+	plan, err := s.prepare(ctx, encoded(source), 7, nil, s.config())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.Missing != 1 || d.Rebuilt != 1 || d.NativeHits != 0 || d.Failure != "" || s.host.(*fakeHost).kvWrites != 0 {
+		t.Fatal("fallback stored or misreported native state", d)
+	}
+	items := plan.body["input"].([]any)
+	native := items[len(items)-2].(object)
+	envelope, _, err := decodeRelayEnvelope(native)
+	if err != nil || envelope["input"] != toolProbeInput || envelope["name"] != "workspace.exec" || items[len(items)-1].(object)["call_id"] != native["call_id"] {
+		t.Fatal("complete historical payload changed", err)
+	}
+	withoutOutput := clone(result)
+	delete(withoutOutput, "output")
+	for _, history := range [][]any{{call}, {result}, {result, call}, {call, result, result}, {call, withoutOutput}} {
+		source["input"] = history
+		if _, err := s.prepare(ctx, encoded(source), 7, nil, s.config()); err == nil {
+			t.Fatal("accepted incomplete/ambiguous history", history)
+		}
+	}
+	s.host = unavailableReplayHost{s.host.(*fakeHost)}
+	source["input"] = []any{call, result}
+	if _, err := s.prepare(ctx, encoded(source), 7, nil, s.config()); err == nil || d.Failure != "storage_error" {
+		t.Fatal("KV outage was treated as a miss", err, d)
 	}
 }
 

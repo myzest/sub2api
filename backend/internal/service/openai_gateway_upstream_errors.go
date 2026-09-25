@@ -577,7 +577,7 @@ func (s *OpenAIGatewayService) handleErrorResponse(
 
 	if s.cfg != nil && s.cfg.Gateway.LogUpstreamErrorBody {
 		logger.LegacyPrintf("service.openai_gateway",
-			"OpenAI upstream error %d (account=%d platform=%s type=%s): %s",
+			"OpenAI transport response error %d (account=%d platform=%s type=%s): %s",
 			resp.StatusCode,
 			account.ID,
 			account.Platform,

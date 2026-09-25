@@ -9,6 +9,30 @@
     return labels[stage]?`${labels[stage]}（${stage}）`:stage;
   }
   function valueText(value) { return typeof value==='object'?JSON.stringify(value):String(value); }
+  function errorSourceText(source) {
+    return {plugin_local_config:'插件本地模型配置',plugin_local_request:'插件本地请求校验',plugin_history:'工具历史恢复',attachment:'图片附件链路',upstream_http:'BPS HTTP 拒绝',upstream_transport:'BPS 连接或传输',upstream_response:'BPS 响应未完成',tool_relay:'工具信封解析',response_conversion:'响应转换',plugin_transport:'插件传输',client_transport:'客户端传输',request_canceled:'宿主或客户端已取消请求',request_timeout_or_canceled:'请求超时或取消'}[source]||source;
+  }
+  function relayText(relays) {
+    if(!Array.isArray(relays)||!relays.length)return [];
+    const lines=['工具信封诊断（最多 16 项；不含参数正文）：'];
+    for(const [i,r] of relays.slice(0,16).entries()){
+      lines.push(`  调用 ${i+1}：${r.state==='decoded'?'JSON 已解码，后续仍需工具校验':'解析失败'} · 解开重复信封 ${r.unwrapped||0} 层${r.error_kind?` · ${r.error_kind}`:''}`);
+      for(const f of (r.fields||[]).slice(0,6)){
+        lines.push(`    层 ${f.layer} · ${f.field} · ${f.type} · ${f.bytes||0} bytes${f.fenced?' · 已去除完整 JSON 围栏':''}${f.error_kind?` · ${f.error_kind}`:''}${f.error_offset?` · 解码内容字节偏移 ${f.error_offset}`:''}`);
+      }
+    }
+    return lines;
+  }
+  function replayText(r) {
+    if(!r)return [];
+    const lines=[];
+    if(r.scope_fingerprint)lines.push(`回放范围指纹：${r.scope_fingerprint}（模型、会话键及首条用户输入的摘要；账号另行隔离）`);
+    lines.push(`回放存储：命中 ${r.native_hits||0} · 新存 ${r.native_saved||0} · 未命中 ${r.missing||0}`);
+    lines.push(`完整历史转换：缺失原生记录 ${r.rebuilt||0} · 外部调用 ${r.imported||0}`);
+    if(r.rebuilt)lines.push('缺失记录已根据客户端提供的完整调用及结果转换历史；未取回原生状态，也未重新执行旧工具。未命中不能单独证明过期。');
+    if(r.failure)lines.push(`回放失败分类：${r.failure}`);
+    return lines;
+  }
   function probeText(p) {
     if(!p) return '尚未探测';
     const kind={text:'文本',image:'图片',image_route:'图片路由',tools:'工具'}[p.kind]||'文本';
@@ -50,6 +74,7 @@
         if(r.response_id)lines.push(`  Response ID：${r.response_id}`);
         if(r.returned_model)lines.push(`  上游返回模型：${r.returned_model}`);
         if(r.usage)lines.push(`  Usage：${JSON.stringify(r.usage)}`);
+        lines.push(...relayText(r.relay),...replayText(r.replay));
       }
       lines.push('此探测使用模拟的客户端结果；本地文件读取和实际执行需在 Codex 客户端验证。');
     }
@@ -76,7 +101,7 @@
     const time=Number(r.finished_at||r.started_at);
     const date=Number.isFinite(time)&&time>0?new Date(time*1000).toLocaleString('zh-CN',{hour12:false}):'时间未知';
     const origin=r.origin==='image_route_probe'?'路由探测':'客户端';
-    return `${date} · ${origin} · #${r.account_id} · ${r.model||'模型未解析'} · 图片 ${r.input_images||0} · HTTP ${r.http_status||'—'}${r.error?' · 失败':''}`;
+    return `${date} · ${origin} · #${r.account_id} · ${r.model||'模型未解析'} · 图片 ${r.input_images||0} · HTTP ${r.http_status||'—'}${r.error?` · 失败${r.error_source?`（${errorSourceText(r.error_source)}）`:''}`:''}`;
   }
   function diagnosticRuntime(snapshot) {
     return `当前插件：${snapshot?.version?`v${snapshot.version}`:'版本未提供'} · 实例：${snapshot?.instance||'尚未连接'}`;
@@ -136,6 +161,9 @@
     if(Number.isFinite(r.request_bytes))lines.push(`客户端请求体：${r.request_bytes} bytes`);
     if(Number.isFinite(r.upstream_request_bytes))lines.push(`Responses 请求体：${r.upstream_request_bytes} bytes`);
     lines.push(`Responses HTTP：${r.http_status||'未收到响应'}`);
+    if(r.responses_started===false)lines.push('Responses 发送阶段：尚未开始');
+    if(r.client_http_status)lines.push(`客户端 HTTP：${r.client_http_status}${r.error&&r.client_http_status<400?'（请求仍在流内失败，HTTP 200 不代表完成）':''}`);
+    if(r.error_source)lines.push(`错误来源：${errorSourceText(r.error_source)}`);
     if(r.content_type)lines.push(`Responses Content-Type：${r.content_type}`);
     if(r.request_id)lines.push(`Responses Request ID：${r.request_id}`);
     if(r.attachment)lines.push(...attachmentText(r.attachment));
@@ -158,6 +186,7 @@
     const handleLabels={plugin:'插件句柄',external:'外部历史 ID',missing:'缺少 ID',invalid_plugin:'插件句柄格式异常'};
     const handles=Object.entries(r.history_handles||{}).map(([name,count])=>`${handleLabels[name]||name} × ${count}`);
     if(handles.length)lines.push(`历史 ID 分类（调用及结果合计）：${handles.join('，')}`);
+    lines.push(...replayText(r.replay));
     lines.push(`可调用工具：${r.callable_tools||0}`);
     if(r.tool_names?.length)lines.push(`工具名称（最多 32 个）：${r.tool_names.slice(0,32).join('，')}`);
     lines.push(`tool_choice：${r.tool_choice===undefined||r.tool_choice===''?'未显式指定':valueText(r.tool_choice)}`);
@@ -166,6 +195,7 @@
     const nativeTypes=Object.entries(r.native_tool_types||{}).map(([name,count])=>`${name} × ${count}`);
     if(nativeTypes.length)lines.push(`BPS 原生工具类型（转换前）：${nativeTypes.join('，')}`);
     if(r.native_tool_names?.length)lines.push(`BPS 原生工具（转换前，最多 32 个）：${r.native_tool_names.slice(0,32).join('，')}`);
+    lines.push(...relayText(r.relay));
     if(r.error)lines.push(`错误：${r.error}`);
     if(r.error&&['request','prepare'].includes(r.stage))lines.push('请求或工具目录转换尚未完成，请先查看错误；当前数量不能证明客户端没有提供工具。');
     else if(!r.callable_tools)lines.push(r.tool_choice==='none'?'tool_choice 为 none，本次请求禁止模型调用工具。':'顶层 tools 与 input.additional_tools 中未解析到可调用的 function/custom 工具，请结合声明来源与 tool_choice 判断。');
