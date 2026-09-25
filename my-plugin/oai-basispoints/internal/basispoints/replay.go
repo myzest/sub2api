@@ -164,20 +164,34 @@ func (r replayStore) restore(ctx context.Context, input []any) ([]any, error) {
 			output = append(output, item)
 			continue
 		}
+		item["type"] = t
+		isCall := t == "function_call" || t == "custom_tool_call"
 		handle := str(item, "call_id")
+		handleKind := replayHandleKind(handle)
 		key, err := r.key(handle)
+		if handleKind == "external" {
+			key, err = "external:"+handle, nil
+		}
 		if err != nil {
 			return nil, inputError(index, item, err)
 		}
 		record := loaded[key]
 		if record == nil {
-			record, err = r.load(ctx, handle)
+			if handleKind == "external" {
+				if !isCall {
+					return nil, inputError(index, item, errors.New("旧工具结果缺少前置调用；切换通道需发送完整调用及对应结果，不能仅发送结果"))
+				}
+				var native object
+				native, err = historicalTransportCall(item)
+				record = &replayRecord{Native: native, Client: item}
+			} else {
+				record, err = r.load(ctx, handle)
+			}
 			if err != nil {
 				return nil, inputError(index, item, err)
 			}
 			loaded[key] = record
 		}
-		isCall := t == "function_call" || t == "custom_tool_call"
 		if isCall {
 			if calls[key] || !sameCall(item, record.Client) {
 				return nil, inputError(index, item, errors.New("回放工具调用重复或内容已改变"))
@@ -202,11 +216,7 @@ func (r replayStore) restore(ctx context.Context, input []any) ([]any, error) {
 			item["call_id"] = record.Native["call_id"]
 			delete(item, "name")
 			delete(item, "namespace")
-			id := str(record.Native, "call_id")
-			if !strings.HasPrefix(id, "fc_") {
-				id = "fc_" + id
-			}
-			item["id"] = id
+			item["id"] = functionItemID(str(record.Native, "call_id"))
 			if text, ok := item["output"].(string); (ok && strings.TrimSpace(text) == "") || item["output"] == nil {
 				item["output"] = "(tool call succeeded with no output)"
 			}
@@ -215,7 +225,7 @@ func (r replayStore) restore(ctx context.Context, input []any) ([]any, error) {
 	}
 	for key := range calls {
 		if !results[key] {
-			return nil, errors.New("缺少对应工具执行结果")
+			return nil, errors.New("缺少对应工具执行结果；切换通道需发送完整历史，不会重新执行旧调用")
 		}
 	}
 	return output, nil

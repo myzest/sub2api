@@ -22,7 +22,7 @@ type relay struct {
 	done     map[int]object
 	response object
 	terminal string
-	observe  func(object) // Optional diagnostics for explicit probes only.
+	observe  func(object) // Observer applies its own bounded diagnostic projection.
 }
 
 func newRelay(ctx context.Context, plan *requestPlan, emit eventWriter) *relay {

@@ -11,8 +11,8 @@
   function valueText(value) { return typeof value==='object'?JSON.stringify(value):String(value); }
   function probeText(p) {
     if(!p) return '尚未探测';
-    const kind={text:'文本',image:'图片',tools:'工具'}[p.kind]||'文本';
-    const success={text:'通道可用',image:'图片探测通过',tools:'工具回放通过'}[p.kind]||'通道可用';
+    const kind={text:'文本',image:'图片',image_route:'图片路由',tools:'工具'}[p.kind]||'文本';
+    const success={text:'通道可用',image:'图片探测通过',image_route:'图片路由探测通过',tools:'工具回放通过'}[p.kind]||'通道可用';
     const state = {running:'探测中',succeeded:success,failed:'探测失败'}[p.state] || p.state;
     const lines=[`${kind} · ${state} · 账号 #${p.account_id} · ${p.model} / ${p.effort}`,p.message];
     if(p.stage)lines.push(`阶段：${stageText(p.stage)}${p.round?` · 第 ${p.round} 轮`:''}`);
@@ -25,22 +25,20 @@
     if(p.latency_ms)lines.push(`耗时：${(p.latency_ms/1000).toFixed(1)} 秒`);
     if(p.usage)lines.push(`Usage：${JSON.stringify(p.usage)}`);
     if(p.upstream_error)lines.push(`上游诊断（已脱敏）：${p.upstream_error}`);
-    if(p.kind==='image'){
-      lines.push(`图片传输：${p.image_transport||'未知'} · detail：${p.image_detail||'未知'}`);
-      if(p.attachment){
-        const a=p.attachment;
-        lines.push(`附件：上传 ${a.uploaded||0} 张 · 复用 ${a.reused||0} 张`);
-        lines.push(`附件 HTTP：${a.http_status||(a.reused?'缓存复用，无上传请求':'尚未收到响应')}`);
-        if(a.content_type)lines.push(`附件 Content-Type：${a.content_type}`);
-        if(a.request_id)lines.push(`附件 Request ID：${a.request_id}`);
-        if(a.diagnostic)lines.push(`附件诊断（已脱敏）：${a.diagnostic}`);
-      }
+    if(p.kind==='image'||p.kind==='image_route'){
+      lines.push(`图片传输：${p.image_transport||'未知'} · detail：${p.image_detail||'未知'} · 格式：${p.image_format||'未记录'}`);
+      if(p.attachment)lines.push(...attachmentText(p.attachment));
       if(p.image_expected)lines.push(`图片正确答案：${p.image_expected}`);
       if(p.image_reply)lines.push(`图片实际回复：${p.image_reply}`);
       else if(p.state==='succeeded'||p.state==='failed')lines.push('图片实际回复：未收到文本');
+      if(p.kind==='image_route'){
+        if(p.route_diagnostic_id)lines.push(`路由诊断 ID：${p.route_diagnostic_id}`);
+        lines.push('此探测由插件生成模拟桌面 additional_tools 请求并经过 Forward 路由；不是重放用户拖入的图片请求。完整记录见“图片路由诊断”。');
+      }
     }
     if(p.kind==='tools'){
       if(p.tool_name)lines.push(`模拟工具：${p.tool_name}`);
+      if(p.tool_source)lines.push(`工具声明位置：${p.tool_source} · 类型：${p.tool_type||'未知'}`);
       lines.push(`已转换工具调用：${p.tool_calls||0}`);
       if(p.tool_expected)lines.push(`模拟结果中的校验值：${p.tool_expected}`);
       if(p.tool_reply)lines.push(`回放后实际回复：${p.tool_reply}`);
@@ -58,34 +56,116 @@
     return lines.filter(Boolean).join('\n');
   }
   function imagePreview(value) {
-    if(typeof value!=='string'||value.length>65536||!value.startsWith('data:image/png;base64,iVBORw0KGgo'))return '';
-    return /^data:image\/png;base64,(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(value)?value:'';
+    if(typeof value!=='string'||value.length>65536)return '';
+    if(!value.startsWith('data:image/png;base64,iVBORw0KGgo')&&!value.startsWith('data:image/jpeg;base64,/9j/'))return '';
+    return /^data:image\/(?:png|jpeg);base64,(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(value)?value:'';
+  }
+  function diagnosticHistory(snapshot,imageOnly=false) {
+    const key=imageOnly?'image_requests':'recent_requests';
+    const fallback=snapshot?.last_request;
+    const hasHistory=Array.isArray(snapshot?.[key]);
+    const source=hasHistory?snapshot[key]:fallback?[fallback]:[];
+    const seen=new Set();
+    return source.filter(r=>{
+      if(!r||typeof r!=='object'||typeof r.id!=='string'||!r.id||seen.has(r.id))return false;
+      if(imageOnly&&!hasHistory&&!r.input_images&&!r.images?.length&&r.origin!=='image_route_probe')return false;
+      seen.add(r.id);return true;
+    }).slice(0,imageOnly?10:20);
+  }
+  function requestLabel(r) {
+    const time=Number(r.finished_at||r.started_at);
+    const date=Number.isFinite(time)&&time>0?new Date(time*1000).toLocaleString('zh-CN',{hour12:false}):'时间未知';
+    const origin=r.origin==='image_route_probe'?'路由探测':'客户端';
+    return `${date} · ${origin} · #${r.account_id} · ${r.model||'模型未解析'} · 图片 ${r.input_images||0} · HTTP ${r.http_status||'—'}${r.error?' · 失败':''}`;
+  }
+  function diagnosticRuntime(snapshot) {
+    return `当前插件：${snapshot?.version?`v${snapshot.version}`:'版本未提供'} · 实例：${snapshot?.instance||'尚未连接'}`;
+  }
+  function attachmentText(a) {
+    const lines=[`附件：上传 ${a.uploaded||0} 张 · 复用 ${a.reused||0} 张`,
+      `附件 HTTP：${a.http_status||(a.reused?'缓存复用，无上传请求':'未收到上传响应')}`];
+    if(a.content_type)lines.push(`附件 Content-Type：${a.content_type}`);
+    if(a.request_id)lines.push(`附件 Request ID：${a.request_id}`);
+    if(a.diagnostic)lines.push(`附件诊断（已脱敏）：${a.diagnostic}`);
+    if(Array.isArray(a.images)&&a.images.length){
+      lines.push('附件文件字段（最多 16 项；插件生成的文件名）：');
+      const states={uploaded:'已上传',reused:'缓存复用',failed:'上传失败'};
+      for(const item of a.images.slice(0,16)){
+        if(!item||typeof item!=='object')continue;
+        lines.push(`  位置=${item.path||'未知'} · 文件名=${item.filename||'未知'} · MIME=${item.mime||'未知'} · 原图=${item.bytes||0} bytes · ${states[item.state]||'状态未知'}`);
+      }
+    }
+    return lines;
+  }
+  function imageSummaryText(images,label) {
+    if(!Array.isArray(images)||!images.length)return [];
+    const lines=[`${label}（最多 16 项；仅字段摘要）：`];
+    for(const image of images.slice(0,16)){
+      if(!image||typeof image!=='object')continue;
+      const fields=[];
+      for(const [key,name] of [['path','位置'],['type','类型'],['source','来源'],['detail','detail'],['mime','MIME']]){
+        const value=image[key];
+        if(value===null)fields.push(`${name}=null`);
+        else if(typeof value==='string'||typeof value==='number')fields.push(`${name}=${String(value).slice(0,200)}`);
+      }
+      if(Number.isFinite(image.encoded_bytes))fields.push(`编码长度=${image.encoded_bytes} bytes`);
+      if(fields.length)lines.push(`  ${fields.join(' · ')}`);
+    }
+    return lines;
   }
   function requestText(r) {
     if(!r)return '尚无已结束的 BPS 路由请求。在 Codex 中发送请求后，点击“刷新诊断”。';
     const lines=[`账号 #${r.account_id} · ${r.model||'模型未解析'}`];
+    if(r.version||r.instance)lines.push(`记录插件：${r.version?`v${r.version}`:'版本未提供'} · 实例：${r.instance||'未提供'}`);
+    if(r.origin)lines.push(`请求来源：${{route:'客户端路由',image_route_probe:'图片路由探测'}[r.origin]||r.origin}`);
     if(r.id)lines.push(`诊断 ID：${r.id}`);
     for(const [key,label] of [['started_at','开始时间'],['finished_at','结束时间']]){
       if(Number.isFinite(r[key])&&r[key]>0)lines.push(`${label}：${new Date(r[key]*1000).toLocaleString('zh-CN',{hour12:false})}`);
     }
     if(r.stage)lines.push(`阶段：${stageText(r.stage)}`);
+    if(r.reasoning_effort)lines.push(`推理强度：${r.reasoning_effort}`);
+    if(r.image_transport)lines.push(`图片传输：${r.image_transport}`);
+    if(Number.isFinite(r.request_bytes))lines.push(`客户端请求体：${r.request_bytes} bytes`);
+    if(Number.isFinite(r.upstream_request_bytes))lines.push(`Responses 请求体：${r.upstream_request_bytes} bytes`);
     lines.push(`Responses HTTP：${r.http_status||'未收到响应'}`);
-    if(r.attachment_http_status)lines.push(`附件 HTTP：${r.attachment_http_status}`);
+    if(r.content_type)lines.push(`Responses Content-Type：${r.content_type}`);
+    if(r.request_id)lines.push(`Responses Request ID：${r.request_id}`);
+    if(r.attachment)lines.push(...attachmentText(r.attachment));
+    else if(r.attachment_http_status)lines.push(`附件 HTTP：${r.attachment_http_status}`);
+    if(r.upstream_error_state){
+      const states={captured:'已采集脱敏校验信息',empty:'错误响应体为空',no_fields:'错误 JSON 不包含可采集的校验字段',non_json:'错误响应不是 JSON',invalid_json:'错误 JSON 无法解析',too_large:'错误响应超过采集上限',read_error:'错误响应读取失败'};
+      lines.push(`上游错误采集：${states[r.upstream_error_state]||r.upstream_error_state}`);
+    }
+    if(r.upstream_error)lines.push(`上游诊断（已脱敏）：${r.upstream_error}`);
     if(r.terminal)lines.push(`结束状态：${valueText(r.terminal)}`);
+    lines.push(`输入图片总数：${r.input_images||0}`);
+    lines.push(...imageSummaryText(r.images,'客户端图片字段'));
+    lines.push(...imageSummaryText(r.upstream_images,'上游图片字段'));
     const types=Object.entries(r.tool_types||{}).map(([name,count])=>`${name} × ${count}`);
     lines.push(`客户端工具类型：${types.length?types.join('，'):'无'}`);
+    const sources=Object.entries(r.tool_sources||{}).map(([name,count])=>`${name} × ${count}`);
+    if(sources.length)lines.push(`工具声明来源（未展开 namespace）：${sources.join('，')}`);
+    if(r.additional_tool_items)lines.push(`additional_tools 输入项：${r.additional_tool_items}`);
+    const historyTypes=Object.entries(r.history_types||{}).map(([name,count])=>`${name} × ${count}`);
+    if(historyTypes.length)lines.push(`历史工具项：${historyTypes.join('，')}`);
+    const handleLabels={plugin:'插件句柄',external:'外部历史 ID',missing:'缺少 ID',invalid_plugin:'插件句柄格式异常'};
+    const handles=Object.entries(r.history_handles||{}).map(([name,count])=>`${handleLabels[name]||name} × ${count}`);
+    if(handles.length)lines.push(`历史 ID 分类（调用及结果合计）：${handles.join('，')}`);
     lines.push(`可调用工具：${r.callable_tools||0}`);
     if(r.tool_names?.length)lines.push(`工具名称（最多 32 个）：${r.tool_names.slice(0,32).join('，')}`);
     lines.push(`tool_choice：${r.tool_choice===undefined||r.tool_choice===''?'未显式指定':valueText(r.tool_choice)}`);
     lines.push(`parallel_tool_calls：${r.parallel_tool_calls===undefined?'未显式指定':valueText(r.parallel_tool_calls)}`);
-    lines.push(`输入图片：${r.input_images||0} · 输出工具调用：${r.output_tool_calls||0}`);
+    lines.push(`输出工具调用：${r.output_tool_calls||0}`);
+    const nativeTypes=Object.entries(r.native_tool_types||{}).map(([name,count])=>`${name} × ${count}`);
+    if(nativeTypes.length)lines.push(`BPS 原生工具类型（转换前）：${nativeTypes.join('，')}`);
+    if(r.native_tool_names?.length)lines.push(`BPS 原生工具（转换前，最多 32 个）：${r.native_tool_names.slice(0,32).join('，')}`);
     if(r.error)lines.push(`错误：${r.error}`);
     if(r.error&&['request','prepare'].includes(r.stage))lines.push('请求或工具目录转换尚未完成，请先查看错误；当前数量不能证明客户端没有提供工具。');
-    else if(!r.callable_tools)lines.push(r.tool_choice==='none'?'tool_choice 为 none，本次请求禁止模型调用工具。':'本次请求没有可调用的 function/custom 工具，请结合客户端工具类型与 tool_choice 判断。');
+    else if(!r.callable_tools)lines.push(r.tool_choice==='none'?'tool_choice 为 none，本次请求禁止模型调用工具。':'顶层 tools 与 input.additional_tools 中未解析到可调用的 function/custom 工具，请结合声明来源与 tool_choice 判断。');
     else if(r.output_tool_calls)lines.push('已生成客户端工具调用；实际执行与权限由 Codex 客户端决定。');
     else lines.push('本次请求有可调用工具，但未输出工具调用；请结合阶段与错误判断。');
     return lines.join('\n');
   }
-  const api={defaults,parseJSON,config,models,probeText,imagePreview,requestText};
+  const api={defaults,parseJSON,config,models,probeText,imagePreview,requestText,diagnosticHistory,requestLabel,diagnosticRuntime};
   if(typeof module!=='undefined'&&module.exports)module.exports=api; else window.BasisPointsModel=api;
 })();

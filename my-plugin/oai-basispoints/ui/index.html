@@ -35,24 +35,39 @@
       <div><label for="probe-effort">推理强度</label><select id="probe-effort"><option>low</option><option>medium</option><option>high</option><option>xhigh</option><option>ultra</option></select></div>
     </div>
     <div class="grid">
+      <div><label for="image-format">图片探测格式</label><select id="image-format"><option value="jpeg">JPEG（默认，覆盖桌面拖图格式）</option><option value="png">PNG（对照）</option></select></div>
       <div><label for="image-detail">图片探测 detail</label><select id="image-detail"><option value="high">high（默认）</option><option value="auto">auto</option><option value="low">low</option><option value="original">original</option></select></div>
     </div>
-    <p class="hint">图片探测生成一张随机数字图，验证所选传输方式与 detail；答案只用于本地比对。工具探测验证工具调用与两轮结果回放，使用模拟的客户端结果，不代表桌面端实际读取过本地文件。</p>
+    <p class="hint">图片探测生成一张所选格式的随机数字图，验证传输方式与 detail；答案只用于本地比对。JPEG 与 PNG 需分别点击探测。工具探测验证 custom 工具及两轮结果回放；结果由本地模拟，不代表桌面端实际读取过文件。</p>
     <div class="actions">
       <button id="probe" type="button">保存并探测文本</button>
       <button id="probe-image" class="secondary" type="button">保存并探测图片</button>
+      <button id="probe-image-route" class="secondary" type="button">保存并探测图片路由</button>
       <button id="probe-tools" class="secondary" type="button">保存并探测工具</button>
     </div>
+    <p class="hint">图片路由探测沿用上方账号、模型、推理强度、格式与 detail，生成带 additional_tools 的模拟桌面请求并经过实际 Forward 路由。需要先启用路由并选中该账号；不会自动开启路由，也不会重放用户拖入的图片。</p>
     <div id="probe-result" class="result" role="status" aria-live="polite">尚未探测</div>
     <figure id="image-preview" hidden><img id="image-preview-img" alt="本次图片探测生成的数字图"><figcaption class="hint">本次探测图片。正确答案与实际回复见上方结果。</figcaption></figure>
     <p class="hint">探测成功只代表本次链路结果，不能证明模型“不降智”或所有 Codex 功能均可用。</p>
   </section>
+  <section aria-labelledby="image-diagnostic-title">
+    <div class="section-title"><h2 id="image-diagnostic-title">图片路由诊断</h2><button id="refresh-image-diagnostic" class="secondary" type="button">刷新图片诊断</button></div>
+    <p class="hint">独立保留本实例最近 10 次已结束的图片请求，普通文本请求不会覆盖它们。拖图失败后可在这里选择对应的 HTTP 400 记录，查看附件上传、Responses 响应和图片字段摘要。刷新只读取状态，不发送上游请求。</p>
+    <p id="image-diagnostic-runtime" class="hint">当前插件版本与实例：等待连接</p>
+    <label for="image-request-history">图片请求历史</label>
+    <select id="image-request-history" disabled><option value="">最新完成请求（刷新时自动跟随）</option></select>
+    <div id="image-request-diagnostic" class="result" role="status" aria-live="polite">本实例尚未记录到已结束的图片路由请求。</div>
+    <p class="hint">只展示字段位置、来源形态、detail、MIME、长度及脱敏错误，不展示图片或对话正文。实例变化时历史会清空；如桌面请求未出现，请先核对路由账号及当前插件实例。</p>
+  </section>
   <section aria-labelledby="diagnostic-title">
     <div class="section-title"><h2 id="diagnostic-title">最近路由请求</h2><button id="refresh-diagnostic" class="secondary" type="button">刷新诊断</button></div>
-    <p class="hint">在 Codex 中重试“查看本地项目”后刷新，可查看最近一次已结束的 BPS 路由请求。这里只记录工具目录、调用数量与状态，不记录对话、工具参数、图片或 token；刷新不发送上游请求。文件读取、命令和 Skills 由 Codex 客户端的工具及权限执行。</p>
+    <p class="hint">在 Codex 中重试后刷新，可选择本实例最近 20 次已结束的 BPS 路由请求。选定记录会保留显示；切回“最新完成请求”后，刷新时自动跟随最新记录。这里只记录协议字段、数量与状态，不记录对话、工具参数、图片或 token；刷新不发送上游请求。文件读取、命令和 Skills 由 Codex 客户端的工具及权限执行。</p>
+    <p id="diagnostic-runtime" class="hint">当前插件版本与实例：等待连接</p>
+    <label for="request-history">请求历史</label>
+    <select id="request-history" disabled><option value="">最新完成请求（刷新时自动跟随）</option></select>
     <div id="request-diagnostic" class="result" role="status" aria-live="polite">尚无已结束的 BPS 路由请求。</div>
   </section>
-  <footer>v0.1.5 · 输入内容保留原字段，由 BPS 判断是否支持。支持 function/custom 工具桥接与结果回放，遵守客户端 parallel_tool_calls；原生搜索与 /responses/compact 暂未接入。</footer>
+  <footer>v0.1.8 · 固定图片附件扩展名，支持完整外部工具历史转换及插件原生回放；原生搜索与 /responses/compact 暂未接入。</footer>
 </main>
 <script src="assets/bridge-v1.js"></script><script src="assets/model.js"></script><script src="assets/app.js"></script>
 </body></html>

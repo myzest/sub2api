@@ -6,29 +6,50 @@ import (
 	"time"
 )
 
-// Only the last completed routed request is retained, in memory. This contains
-// protocol labels and counts, never prompts, schemas, tool arguments or pixels.
+// Bounded completed-request summaries are retained only in memory. Raw request
+// bodies, image URLs/pixels, schemas and tool arguments are never stored here.
 type requestDiagnostic struct {
-	ID                   string         `json:"id"`
-	AccountID            int64          `json:"account_id"`
-	Model                string         `json:"model,omitempty"`
-	StartedAt            int64          `json:"started_at"`
-	FinishedAt           int64          `json:"finished_at"`
-	Stage                string         `json:"stage"`
-	HTTPStatus           int            `json:"http_status,omitempty"`
-	AttachmentHTTPStatus int            `json:"attachment_http_status,omitempty"`
-	ToolTypes            map[string]int `json:"tool_types"`
-	CallableTools        int            `json:"callable_tools"`
-	ToolNames            []string       `json:"tool_names"`
-	ToolChoice           string         `json:"tool_choice"`
-	ParallelToolCalls    bool           `json:"parallel_tool_calls"`
-	InputImages          int            `json:"input_images"`
-	OutputToolCalls      int            `json:"output_tool_calls"`
-	Terminal             string         `json:"terminal,omitempty"`
-	Error                string         `json:"error,omitempty"`
+	ID                   string            `json:"id"`
+	Version              string            `json:"version"`
+	Instance             string            `json:"instance"`
+	Origin               string            `json:"origin"`
+	AccountID            int64             `json:"account_id"`
+	Model                string            `json:"model,omitempty"`
+	StartedAt            int64             `json:"started_at"`
+	FinishedAt           int64             `json:"finished_at"`
+	Stage                string            `json:"stage"`
+	HTTPStatus           int               `json:"http_status,omitempty"`
+	AttachmentHTTPStatus int               `json:"attachment_http_status,omitempty"`
+	Attachment           *attachmentReport `json:"attachment,omitempty"`
+	ImageTransport       string            `json:"image_transport"`
+	ReasoningEffort      string            `json:"reasoning_effort,omitempty"`
+	RequestBytes         int               `json:"request_bytes,omitempty"`
+	UpstreamRequestBytes int               `json:"upstream_request_bytes,omitempty"`
+	RequestID            string            `json:"request_id,omitempty"`
+	ContentType          string            `json:"content_type,omitempty"`
+	UpstreamError        string            `json:"upstream_error,omitempty"`
+	UpstreamErrorState   string            `json:"upstream_error_state,omitempty"`
+	Images               []imageDiagnostic `json:"images,omitempty"`
+	UpstreamImages       []imageDiagnostic `json:"upstream_images,omitempty"`
+	ToolTypes            map[string]int    `json:"tool_types"`
+	ToolSources          map[string]int    `json:"tool_sources"`
+	AdditionalToolItems  int               `json:"additional_tool_items"`
+	CallableTools        int               `json:"callable_tools"`
+	ToolNames            []string          `json:"tool_names"`
+	HistoryTypes         map[string]int    `json:"history_types,omitempty"`
+	HistoryHandles       map[string]int    `json:"history_handles,omitempty"`
+	ToolChoice           string            `json:"tool_choice"`
+	ParallelToolCalls    bool              `json:"parallel_tool_calls"`
+	InputImages          int               `json:"input_images"`
+	OutputToolCalls      int               `json:"output_tool_calls"`
+	NativeToolTypes      map[string]int    `json:"native_tool_types,omitempty"`
+	NativeToolNames      []string          `json:"native_tool_names,omitempty"`
+	Terminal             string            `json:"terminal,omitempty"`
+	Error                string            `json:"error,omitempty"`
 }
 
 func (d *requestDiagnostic) input(raw []byte) {
+	d.RequestBytes = len(raw)
 	source, err := decodeObject(raw)
 	if err != nil {
 		return
@@ -82,19 +103,57 @@ func (d *requestDiagnostic) input(raw []byte) {
 			}
 		}
 	}
-	tools, _ := source["tools"].([]any)
-	count(tools, 0)
-	items, _ := source["input"].([]any)
-	for _, raw := range items {
-		item, _ := raw.(object)
-		for _, key := range []string{"content", "output"} {
-			parts, _ := item[key].([]any)
-			for _, raw := range parts {
-				part, _ := raw.(object)
-				if str(part, "type") == "input_image" {
-					d.InputImages++
-				}
-			}
+	if d.ToolTypes == nil {
+		d.ToolTypes = map[string]int{}
+	}
+	d.ToolSources = map[string]int{}
+	groups, _ := readToolGroups(source) // prepare reports malformed carriers.
+	for _, group := range groups {
+		name := "tools"
+		if group.index >= 0 {
+			name = "input.additional_tools"
+			d.AdditionalToolItems++
+		}
+		d.ToolSources[name] += len(group.tools)
+		count(group.tools, 0)
+	}
+	d.Images, d.InputImages = summarizeImages(source)
+	d.HistoryTypes, d.HistoryHandles = map[string]int{}, map[string]int{}
+	input, _ := source["input"].([]any)
+	for _, raw := range input {
+		item, ok := raw.(object)
+		if !ok {
+			continue
+		}
+		kind := strings.ToLower(strings.TrimSpace(str(item, "type")))
+		switch kind {
+		case "function_call", "custom_tool_call", "function_call_output", "custom_tool_call_output":
+			d.HistoryTypes[kind]++
+			d.HistoryHandles[replayHandleKind(str(item, "call_id"))]++
+		}
+	}
+}
+
+// Record labels before relay validation so a rejected native tool is visible
+// without retaining its arguments, input text, response body or credentials.
+func (d *requestDiagnostic) observe(event object) {
+	switch str(event, "type") {
+	case "response.completed", "response.failed", "response.incomplete":
+	default:
+		return
+	}
+	response, _ := event["response"].(object)
+	d.NativeToolTypes = map[string]int{}
+	d.NativeToolNames = []string{}
+	for _, call := range responseToolCalls(response) {
+		d.NativeToolTypes[str(call, "type")]++
+		name := str(call, "name")
+		if namespace := str(call, "namespace"); namespace != "" {
+			name = namespace + "." + name
+		}
+		name = limitCharacters(redactProbeText(name, nil, ""), 200)
+		if len(d.NativeToolNames) < 32 && !slices.Contains(d.NativeToolNames, name) {
+			d.NativeToolNames = append(d.NativeToolNames, name)
 		}
 	}
 }
@@ -107,7 +166,7 @@ func (d *requestDiagnostic) catalog(c *toolCatalog) {
 	}
 	slices.Sort(names)
 	for _, name := range names[:min(len(names), 32)] {
-		d.ToolNames = append(d.ToolNames, redactProbeText(name, nil, ""))
+		d.ToolNames = append(d.ToolNames, limitCharacters(redactProbeText(name, nil, ""), 200))
 	}
 }
 
@@ -115,7 +174,17 @@ func (s *Server) finishDiagnostic(d *requestDiagnostic) {
 	d.FinishedAt = time.Now().Unix()
 	s.mu.Lock()
 	s.lastRequest = d
+	s.recentRequests = prependDiagnostic(s.recentRequests, d, 20)
+	if d.InputImages > 0 {
+		s.imageRequests = prependDiagnostic(s.imageRequests, d, 10)
+	}
 	s.mu.Unlock()
+}
+
+func prependDiagnostic(history []*requestDiagnostic, d *requestDiagnostic, limit int) []*requestDiagnostic {
+	next := make([]*requestDiagnostic, 1, min(len(history)+1, limit))
+	next[0] = d
+	return append(next, history[:min(len(history), limit-1)]...)
 }
 
 func responseToolCalls(response object) []object {

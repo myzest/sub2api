@@ -14,11 +14,12 @@ type toolSpec struct {
 	schema                     *jsonschema.Schema
 }
 type toolCatalog struct {
-	tools    map[string]toolSpec
-	entries  []any
-	required bool
-	forced   string
-	parallel bool
+	tools     map[string]toolSpec
+	entries   []any
+	entriesAt map[int][]any
+	required  bool
+	forced    string
+	parallel  bool
 }
 type noExternalSchemas struct{}
 
@@ -27,18 +28,20 @@ func (noExternalSchemas) Load(string) (any, error) {
 }
 
 func readTools(source object) (*toolCatalog, error) {
-	c := &toolCatalog{tools: map[string]toolSpec{}, entries: []any{}, parallel: source["parallel_tool_calls"] != false}
+	c := &toolCatalog{tools: map[string]toolSpec{}, entries: []any{}, entriesAt: map[int][]any{-1: {}}, parallel: source["parallel_tool_calls"] != false}
 	if str(source, "tool_choice") == "none" {
 		return c, nil
 	}
-	if raw, ok := source["tools"]; ok && raw != nil {
-		list, ok := raw.([]any)
-		if !ok {
-			return nil, errors.New("tools 必须为数组")
-		}
-		if err := c.add(list, "", 0); err != nil {
+	groups, err := readToolGroups(source)
+	if err != nil {
+		return nil, err
+	}
+	for _, group := range groups {
+		start := len(c.entries)
+		if err := c.add(group.tools, "", 0); err != nil {
 			return nil, err
 		}
+		c.entriesAt[group.index] = c.entries[start:]
 	}
 	switch v := source["tool_choice"].(type) {
 	case nil:
@@ -116,6 +119,15 @@ func (c *toolCatalog) restrict(selected map[string]bool) {
 		}
 	}
 	c.entries = entries
+	for index, group := range c.entriesAt {
+		kept := []any{}
+		for _, raw := range group {
+			if selected[str(raw.(object), "name")] {
+				kept = append(kept, raw)
+			}
+		}
+		c.entriesAt[index] = kept
+	}
 }
 func (c *toolCatalog) add(list []any, namespace string, depth int) error {
 	if depth > 4 {
@@ -149,8 +161,14 @@ func (c *toolCatalog) add(list []any, namespace string, depth int) error {
 			}
 			continue
 		}
-		if _, ok := c.tools[key]; ok || len(c.tools) >= 512 {
-			return errors.New("工具名重复或数量超过 512")
+		if previous, ok := c.tools[key]; ok {
+			if previous.kind != kind || previous.namespace != namespace || digest(previous.spec) != digest(t) {
+				return errors.New("同名客户端工具存在冲突定义")
+			}
+			continue
+		}
+		if len(c.tools) >= 512 {
+			return errors.New("客户端工具数量超过 512")
 		}
 		spec := toolSpec{key: key, name: name, namespace: namespace, kind: kind, spec: t}
 		entry := clone(t)
@@ -189,11 +207,11 @@ func (c *toolCatalog) instructions() string {
 	if len(c.tools) == 0 {
 		return "This request comes from an external Responses API client. No client tools are available for this turn. Answer using the supplied inputs as assistant text. Do not invoke native Excel, Office, workbook, connector, search, or other server tools."
 	}
-	text := `This request is from an external Codex/Responses API client. The JSON catalog below describes real tools executed by that client in its own environment, not in the Excel workbook. When asked to inspect a local project, invoke the declared shell or file tools to inspect it; the directory name alone is not the file contents. Do not claim that local files or shell access are unavailable when the catalog provides them. Follow the client's skill instructions and use its declared tools to read relevant SKILL.md files when needed. Never invent file contents or tool execution results.
+	text := `This request is from an external Codex/Responses API client. The JSON catalogs in developer messages describe real tools executed by that client in its own environment, not in the Excel workbook. The initial catalog below may be empty; additional catalogs can appear later in the input and become available from that position. When asked to inspect a local project, invoke the declared shell or file tools, including a custom code-execution tool when provided, to inspect it; the directory name alone is not the file contents. Do not claim that local files or shell access are unavailable when the catalog provides them. Follow the client's skill instructions and use its declared tools to read relevant SKILL.md files when needed. Never invent file contents or tool execution results.
 Use the native run_officejs function solely as a relay envelope containing exactly one catalog tool per call. Its code field must contain a serialized JSON object, never JavaScript or OfficeJS. For a function tool use {"name":"CATALOG_NAME","arguments":{...}}. For a custom tool use {"name":"CATALOG_NAME","input":"RAW_INPUT"}. Include summary, extended_summary, destructive=false and references=[] in the outer run_officejs arguments. Serialize strings correctly, preserving quotes and backslashes. Use the exact qualified catalog name for namespace tools. Do not nest run_officejs in code. The relay will return the requested tool's result on the next turn. Do not repeat calls whose results are already in the conversation. Do not invoke any other native Excel, workbook, Office, connector, search, or planning tool.
 Client tool catalog:
 `
-	text += string(encoded(c.entries))
+	text += string(encoded(c.entriesAt[-1]))
 	if !c.parallel {
 		text += "\nInvoke at most one catalog tool in this response."
 	}

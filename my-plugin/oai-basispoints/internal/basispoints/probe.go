@@ -34,6 +34,9 @@ func (s *Server) probeOnce(ctx context.Context, p *Probe, cfg Config) error {
 	}
 	h := headersFromProto(i.Headers)
 	h.Set("Authorization", "Bearer "+i.Token)
+	if p.Kind == "image_route" {
+		return s.probeImageRoute(ctx, p, cfg, h, i.ProxyUrl)
+	}
 	headers, err := bpsHeaders(h)
 	if err != nil {
 		return err
@@ -69,18 +72,21 @@ func (s *Server) probeOnce(ctx context.Context, p *Probe, cfg Config) error {
 // desktop requests. The only tool is virtual: no shell or filesystem execution.
 func (s *Server) probeTools(ctx context.Context, p *Probe, cfg Config, h, headers http.Header, proxy string) error {
 	p.ToolName = "diagnostics.read_probe"
+	p.ToolType = "custom"
+	p.ToolSource = "input.additional_tools"
 	p.ToolExpected = "BPS_TOOL_" + newID()
-	input := []any{message("user", "Call diagnostics.read_probe with path=probe.txt. After the tool result arrives, reply only with the exact challenge value from that result. This is a simulated read-only diagnostic tool, not a real filesystem. Do not invent the result.")}
+	input := []any{
+		message("user", "Call diagnostics.read_probe with the exact raw input probe.txt. After the tool result arrives, reply only with the exact challenge value from that result. This is a simulated read-only diagnostic tool, not a real filesystem. Do not invent the result."),
+		object{"type": "additional_tools", "role": "developer", "tools": []any{
+			object{"type": "namespace", "name": "diagnostics", "tools": []any{
+				object{"type": "custom", "name": "read_probe", "description": "Returns a simulated diagnostic challenge. Input must be exactly probe.txt. No files are accessed.", "format": object{"type": "text"}},
+			}},
+		}},
+	}
 	source := object{
 		"model": p.Model, "stream": true, "reasoning": object{"effort": p.Effort},
 		"prompt_cache_key": "bps-probe-" + p.ID, "input": input, "parallel_tool_calls": false,
-		"tool_choice": object{"type": "allowed_tools", "mode": "required", "tools": []any{object{"type": "function", "name": "read_probe", "namespace": "diagnostics"}}},
-		"tools": []any{object{"type": "namespace", "name": "diagnostics", "tools": []any{
-			object{"type": "function", "name": "read_probe", "description": "Returns a simulated diagnostic challenge. No files are accessed.", "parameters": object{
-				"type": "object", "properties": object{"path": object{"type": "string", "enum": []any{"probe.txt"}}},
-				"required": []any{"path"}, "additionalProperties": false,
-			}},
-		}}},
+		"tool_choice": object{"type": "allowed_tools", "mode": "required", "tools": []any{object{"type": "custom", "name": "read_probe", "namespace": "diagnostics"}}},
 	}
 	p.Round = 1
 	first, err := s.probeRound(ctx, p, cfg, source, h, headers, proxy)
@@ -90,13 +96,13 @@ func (s *Server) probeTools(ctx context.Context, p *Probe, cfg Config, h, header
 	p.Stage = "tool_check"
 	calls := responseToolCalls(first)
 	p.ToolCalls = len(calls)
-	if len(calls) != 1 || str(calls[0], "type") != "function_call" || str(calls[0], "name") != "read_probe" || str(calls[0], "namespace") != "diagnostics" {
-		return errors.New("工具探测第一轮没有返回预期的命名空间 function_call")
+	if len(calls) != 1 || str(calls[0], "type") != "custom_tool_call" || str(calls[0], "name") != "read_probe" || str(calls[0], "namespace") != "diagnostics" || str(calls[0], "input") != "probe.txt" {
+		return errors.New("工具探测第一轮没有返回预期的命名空间 custom_tool_call 及原始 input")
 	}
 	output, _ := first["output"].([]any)
 	input = append(input, output...)
 	input = append(input, object{
-		"type": "function_call_output", "call_id": calls[0]["call_id"],
+		"type": "custom_tool_call_output", "call_id": calls[0]["call_id"],
 		"output": string(encoded(object{"challenge": p.ToolExpected, "simulated": true})),
 	})
 	source["input"], source["tool_choice"] = input, "none"

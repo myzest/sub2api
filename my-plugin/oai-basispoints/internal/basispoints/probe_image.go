@@ -9,6 +9,7 @@ import (
 	"image"
 	"image/color"
 	"image/draw"
+	"image/jpeg"
 	"image/png"
 	"net/http"
 	"regexp"
@@ -17,7 +18,7 @@ import (
 
 // The expected answer exists only in these pixels and local probe status. It
 // is never inserted into the text prompt or image metadata/filename.
-func probeImage() (dataURL, expected string, err error) {
+func probeImage(format string) (dataURL, expected string, err error) {
 	var random [6]byte
 	if _, err := rand.Read(random[:]); err != nil {
 		return "", "", errors.New("无法生成图片探测样本")
@@ -54,10 +55,18 @@ func probeImage() (dataURL, expected string, err error) {
 		}
 	}
 	var encoded bytes.Buffer
-	if err := png.Encode(&encoded, picture); err != nil {
+	switch format {
+	case "jpeg":
+		err = jpeg.Encode(&encoded, picture, &jpeg.Options{Quality: 95})
+	case "png":
+		err = png.Encode(&encoded, picture)
+	default:
+		return "", "", errors.New("图片探测格式只允许 jpeg/png")
+	}
+	if err != nil {
 		return "", "", errors.New("无法编码图片探测样本")
 	}
-	return "data:image/png;base64," + base64.StdEncoding.EncodeToString(encoded.Bytes()), string(digits), nil
+	return "data:image/" + format + ";base64," + base64.StdEncoding.EncodeToString(encoded.Bytes()), string(digits), nil
 }
 
 func probeSource(p *Probe) (object, error) {
@@ -65,7 +74,10 @@ func probeSource(p *Probe) (object, error) {
 	if p.Kind != "image" {
 		return source, nil
 	}
-	dataURL, expected, err := probeImage()
+	if p.ImageFormat == "" {
+		p.ImageFormat = "jpeg"
+	}
+	dataURL, expected, err := probeImage(p.ImageFormat)
 	if err != nil {
 		return nil, err
 	}
@@ -113,6 +125,10 @@ func redactProbeText(text string, headers http.Header, imageURL string) string {
 // Follow the reference diagnostic boundary: retain validation paths/reasons,
 // not rejected input, context, a whole HTML page or the raw response body.
 func probeDiagnostic(value object, headers http.Header, imageURL string) string {
+	return diagnosticFields(value, func(_ string, text string) string { return redactProbeText(text, headers, imageURL) })
+}
+
+func diagnosticFields(value object, redact func(string, string) string) string {
 	if response, ok := value["response"].(object); ok {
 		value = response
 	}
@@ -122,11 +138,11 @@ func probeDiagnostic(value object, headers http.Header, imageURL string) string 
 	safe := object{}
 	for _, key := range []string{"message", "code", "param", "detail"} {
 		if text := str(value, key); text != "" {
-			safe[key] = redactProbeText(text, headers, imageURL)
+			safe[key] = redact(key, text)
 		}
 	}
 	if text := str(value, "error"); text != "" {
-		safe["message"] = redactProbeText(text, headers, imageURL)
+		safe["message"] = redact("message", text)
 	}
 	if details, ok := value["detail"].([]any); ok {
 		clean := []any{}
@@ -138,7 +154,7 @@ func probeDiagnostic(value object, headers http.Header, imageURL string) string 
 			entry := object{}
 			for _, key := range []string{"msg", "type"} {
 				if text := str(item, key); text != "" {
-					entry[key] = redactProbeText(text, headers, imageURL)
+					entry[key] = redact(key, text)
 				}
 			}
 			if loc, ok := item["loc"].([]any); ok {
@@ -146,7 +162,7 @@ func probeDiagnostic(value object, headers http.Header, imageURL string) string 
 				for _, part := range loc[:min(len(loc), 16)] {
 					switch part := part.(type) {
 					case string:
-						path = append(path, redactProbeText(part, headers, imageURL))
+						path = append(path, redact("loc", part))
 					case json.Number:
 						path = append(path, part)
 					}
@@ -159,6 +175,9 @@ func probeDiagnostic(value object, headers http.Header, imageURL string) string 
 	}
 	if len(safe) == 0 {
 		return ""
+	}
+	if kind := str(value, "type"); kind != "" {
+		safe["type"] = redact("type", kind)
 	}
 	return limitCharacters(string(encoded(safe)), 1600)
 }

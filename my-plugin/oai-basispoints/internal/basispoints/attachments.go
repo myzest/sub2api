@@ -20,12 +20,46 @@ import (
 // Wire behavior follows cpa-plugin-oai-basispoints f4a2563 attachments.go:
 // POST a multipart file, then replace the data URL with openai_file_id.
 type attachmentReport struct {
-	Uploaded    int    `json:"uploaded"`
-	Reused      int    `json:"reused"`
-	HTTPStatus  int    `json:"http_status,omitempty"`
-	ContentType string `json:"content_type,omitempty"`
-	RequestID   string `json:"request_id,omitempty"`
-	Diagnostic  string `json:"diagnostic,omitempty"`
+	Uploaded    int                         `json:"uploaded"`
+	Reused      int                         `json:"reused"`
+	Images      []attachmentImageDiagnostic `json:"images,omitempty"`
+	HTTPStatus  int                         `json:"http_status,omitempty"`
+	ContentType string                      `json:"content_type,omitempty"`
+	RequestID   string                      `json:"request_id,omitempty"`
+	Diagnostic  string                      `json:"diagnostic,omitempty"`
+}
+
+// Only generated filenames and protocol metadata, never original filenames,
+// file IDs, credentials or image content. Bounded to 16 entries per request.
+type attachmentImageDiagnostic struct {
+	Path     string `json:"path"`
+	Filename string `json:"filename"`
+	MIME     string `json:"mime"`
+	Bytes    int    `json:"bytes"`
+	State    string `json:"state"`
+}
+
+// The observed BPS validation lists .jpeg/.jpg/.png/.gif/.webp. Go's MIME
+// database can prefer .jfif or .jpe for JPEG, so do not use its ordering.
+const attachmentWireVersion = "image-extensions-v2"
+
+func attachmentImageSpec(mediaType string) (canonical, extension string, ok bool) {
+	switch strings.ToLower(strings.TrimSpace(mediaType)) {
+	case "image/jpeg", "image/jpg":
+		return "image/jpeg", ".jpg", true
+	case "image/png":
+		return "image/png", ".png", true
+	case "image/gif":
+		return "image/gif", ".gif", true
+	case "image/webp":
+		return "image/webp", ".webp", true
+	default:
+		return "", "", false
+	}
+}
+
+func unsupportedImageError() error {
+	return &attachmentError{status: 400, code: "bps_unsupported_image", text: "BPS 图片附件仅支持 JPEG、PNG、GIF 或 WebP；请转换图片格式后再发送"}
 }
 
 type attachmentError struct {
@@ -140,11 +174,29 @@ func (s *Server) uploadInputImages(ctx context.Context, plan *requestPlan, heade
 			if err != nil {
 				return report, err
 			}
+			canonical, extension, supported := attachmentImageSpec(mediaType)
+			if !supported {
+				return report, unsupportedImageError()
+			}
+			mediaType = canonical
+			name := "image" + extension
+			info := attachmentImageDiagnostic{Path: fmt.Sprintf("input[%d].content[%d]", index, j), Filename: name, MIME: mediaType, Bytes: len(data), State: "failed"}
 			// The cache retains only a hash and file ID, never pixels or token.
-			key := digest([]any{endpoint, plan.store.accountID, headers.Get("Chatgpt-Account-Id"), headers.Get("Authorization"), mediaType, digest(data)})
+			// Key the actual upload format. The cache is process-local and is
+			// also cleared when the new plugin process starts on upgrade.
+			key := digest([]any{attachmentWireVersion, endpoint, plan.store.accountID, headers.Get("Chatgpt-Account-Id"), headers.Get("Authorization"), mediaType, extension, digest(data)})
 			id, reused, err := s.attachments.obtain(key, func() (string, error) {
-				return s.uploadImage(ctx, endpoint, headers, proxy, mediaType, data, dataURL, report)
+				return s.uploadImage(ctx, endpoint, headers, proxy, mediaType, name, data, dataURL, report)
 			})
+			if err == nil {
+				info.State = "uploaded"
+				if reused {
+					info.State = "reused"
+				}
+			}
+			if len(report.Images) < 16 {
+				report.Images = append(report.Images, info)
+			}
 			if err != nil {
 				return report, err
 			}
@@ -173,13 +225,9 @@ func (s *Server) uploadInputImages(ctx context.Context, plan *requestPlan, heade
 	return report, nil
 }
 
-func (s *Server) uploadImage(ctx context.Context, endpoint string, headers http.Header, proxy, mediaType string, data []byte, dataURL string, report *attachmentReport) (string, error) {
+func (s *Server) uploadImage(ctx context.Context, endpoint string, headers http.Header, proxy, mediaType, name string, data []byte, dataURL string, report *attachmentReport) (string, error) {
 	var body bytes.Buffer
 	w := multipart.NewWriter(&body)
-	name := "image"
-	if extensions, _ := mime.ExtensionsByType(mediaType); len(extensions) > 0 {
-		name += extensions[0]
-	}
 	ph := make(textproto.MIMEHeader)
 	ph.Set("Content-Disposition", mime.FormatMediaType("form-data", map[string]string{"name": "file", "filename": name}))
 	ph.Set("Content-Type", mediaType)

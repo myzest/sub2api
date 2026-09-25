@@ -1,8 +1,8 @@
 # 交付状态
 
-版本：0.1.5。日期：2026-09-25。
+版本：0.1.8。日期：2026-09-25。
 
-插件变更仅位于独立目录，不改 Sub2API 主程序或 GPT Inspector。新增同源图片附件上传、图片测试入口、两轮工具探测、最近请求诊断，并按 CPA v0.1.8 补齐 allowed_tools、并行工具限制、custom args、工具结果字段和 context_management 行为。默认允许模型保留 gpt-6-astra。
+插件变更仅位于独立目录，不改 Sub2API 主程序或 GPT Inspector。本版固定图片附件扩展名、增加 JPEG/PNG 探测和附件元数据诊断，并按参考实现适配完整外部工具历史。保留 additional_tools 与图片独立历史功能。默认允许模型保留 gpt-6-astra。
 
 遵照用户“不要自测，直接打包，由用户自测”的要求：本次进行源码对照、代码修改、格式化、三平台编译、签名和打包；不运行 Go/Node/浏览器测试、真实账号探测或部署。回归源码中与新压缩规则、重复调用校验相关的既有断言已同步，但未执行。
 
@@ -12,16 +12,56 @@
 
 - 账号 #47 的 gpt-5.6-sol / xhigh 文本请求曾返回 HTTP 200、模型 gpt-5.6-sol；这证明当次文本通道可访问，不证明模型质量。
 - 用户反馈 0.1.3 已完成对接；随后报告拖图片返回 502，模型检查项目时声称只能看到目录名。
-- 未取得上述失败请求的实际工具目录或 BPS 错误体，不能断定根因。附件适配和工具协议变更依据开源作者当前实现，效果需要用户自行确认。
+- 用户反馈 0.1.5 的文本、图片、工具三个按钮均通过；实际 Codex 桌面仍无法读取源码和使用 Subagent。这是用户反馈，非代理实测。
+- 用户提供账号 #29 / gpt-6-astra 的 0.1.5 路由诊断：HTTP 200、tool_choice=auto、parallel_tool_calls=false、工具类型为空、可调用数为 0，最终 bps_response: BPS 返回了不支持的原生工具；未释放给客户端。
+- 旧诊断只统计顶层 tools，不能据其 0 工具断定客户端未发送目录；其未记录实际 input 类型或被拒工具名。以下修复针对源码中已确定、且与该表现相符的目录遗漏，真实请求是否走该载体由新版诊断确认。
+- 0.1.6 用户反馈：账号 #29 / gpt-6-astra 的真实路由经 input.additional_tools 提供 13 个 callable，HTTP 200、response.completed、原生 run_officejs 一次并输出一个客户端工具调用。此记录证明目录提取和调用转换有效，不能替代实际文件读取或 Subagent 执行验收。
+- 用户同时报告拖图收到 HTTP 400，但插件后台只能取得上述无图片的成功记录。未取得实际失败请求的图片字段或 BPS 校验详情，不能确定是 detail、文件 ID、格式或其他字段导致。
+- 随后取得 v0.1.7 失败记录 `991cfab37f3b5843743cb35fafdc45a1`：JPEG 输入 1 张、附件复用 1 张、Responses HTTP 400，`Invalid input: Expected image type to be a supported format: .jpeg, .jpg, .png, .gif, .webp but got none.`，param=input。工具目录仍正常。这证明错误位于 Responses 对图片类型的校验，但当次没有上传请求或文件名证据。
+- 用户新增 `input[48].type=custom_tool_call: 工具调用没有本插件的回放句柄`（诊断 `92d21f23fedd4389c33cdae04d38c062`），并确认发生于切换通道/模型或继续旧任务。旧 restore 对所有非插件 ID 均拒绝，两个参考源码存在历史 fallback，本版补齐该路径。
 
 ## 本版验收入口
 
-1. 插件页“保存并探测图片”：随机六位数字 PNG，默认 high，另可选 auto/low/original；分别显示附件与 Responses HTTP、失败阶段、脱敏诊断、图像和实际回复。
-2. 插件页“保存并探测工具”：第一轮转换 namespaced function 调用并记录 KV，模拟回传随机值；第二轮 tool_choice=none 仍恢复历史工具并核对回复。不会运行服务器 shell，也不会读取桌面文件。
-3. 在 Codex 新任务请求读取项目后点击“刷新诊断”：只读取最后已结束的 BPS 请求摘要，无新的上游调用。结合工具类型、可调用数量、tool_choice、输出工具数和错误判断问题。
+1. 插件页“保存并探测图片”：随机六位数字图，默认 JPEG，可选 PNG 对照；默认 high，另可选 auto/low/original。分别显示附件与 Responses HTTP、失败阶段、脱敏诊断、图像和实际回复。
+2. 插件页“保存并探测工具”：第一轮从 input.additional_tools 提取 namespaced custom 工具，转换调用并核对 input=probe.txt，记录 KV 后模拟回传随机值；第二轮 tool_choice=none 仍恢复历史工具并核对回复。不会运行服务器 shell，也不会读取桌面文件。
+3. 在 Codex 新任务请求读取项目后点击“刷新诊断”：只读取最后已结束的 BPS 请求摘要，无新的上游调用。结合声明来源、工具类型/名称、可调用数量、tool_choice、转换前原生工具名称、输出工具数和错误判断问题。
 4. 实际桌面端确认文件读取、命令执行、编辑、Skills、图片和持续多轮回放。一次虚拟工具探测不覆盖这些完整功能。
+5. “保存并探测图片路由”：需启用 BPS 路由且选中账号，经真实 Forward 入口发送模拟桌面图片请求。独立“图片路由诊断”保留最近 10 次图片路由，可与真实拖图失败记录对照；普通路由历史最多 20 次，两者均只在请求结束后记录。
+6. 升级后确认记录插件为 v0.1.8 且实例号变化；先选 JPEG / auto 做图片路由探测，再选 PNG 对照。真实桌面拖图应显示附件 `image.jpg / image/jpeg`，新实例首次同图为上传。若仍为 got none，保留新的文件字段和 Responses 错误；本次不能预先认定远端附件元数据已修复。
+7. 使用此前含完整 custom/function 调用及结果的旧任务继续，核对历史 ID 分类与后续新工具调用；不删除历史、不要求重跑旧工具。插件句柄的 KV 缺失/过期、账号/模型变化仍应拒绝，外部孤立结果也应拒绝。
 
-尚未验证 gpt-6-astra 的账号可用性、各 detail 的 BPS 接受情况、附件文件寿命、多工具/多轮实机表现、工具输出中的图片，以及相对普通通道的回答质量。未接入的原生搜索、MCP/tool_search、独立 compact/input_tokens 等边界见 README。
+用户反馈的三项探测通过不覆盖所有模型/账号、各 detail、附件文件寿命、多工具/多轮实机表现、工具输出中的图片或相对普通通道的回答质量。未接入的原生搜索、MCP/tool_search、独立 compact/input_tokens 等边界见 README。
+
+## 0.1.8 静态修复与证据边界
+
+- Go MIME 扩展名查询在本机复现 JPEG 首项 `.jfif`，不在用户上游错误列出的支持列表内。改为明确 MIME/扩展名映射；未取得服务器原上传文件名，故将该问题记录为确定的兼容缺陷、待用户实测确认的故障原因。
+- JPEG、PNG、GIF、WebP 原字节上传，image/jpg 规范为 image/jpeg；不支持的 MIME 在附件上传前报错。只增加本地诊断字段，Responses 图片 schema 和 detail 策略不变。
+- JPEG/PNG 探测覆盖所选编码，默认 JPEG；不会一次点击同时请求两个格式，只有生成样本会编码，不重新压缩用户图片。
+- 旧历史通过参考 run_officejs 信封重建，仅接受原始有效 payload 与完整调用/结果配对。新调用仍走目录校验、KV 保存、客户端执行；本插件句柄的原生回放检查未放宽。
+- 遵照要求不运行功能测试或真实账号请求。执行源码复核、Go 格式化、JS 语法检查、三平台编译与打包，不把编译成功描述为图片或多轮任务验收通过。
+
+## 0.1.7 图片路由定位
+
+- 已确认普通 Forward 遇到非 2xx 原先直接丢弃错误正文，现在提取有大小上限的脱敏校验字段；状态码和限流头保持原行为，错误附诊断 ID。
+- 原单条 last_request 保留兼容，同时增加最近 20 条普通路由、独立 10 条图片路由；只存当前进程内存，版本/实例可用于检查记录是否来自同一进程。
+- 图片摘要同时覆盖消息 content、工具 output 和顶层图片项；只记录协议形态、detail、MIME、长度和数量，不扩大实际上传支持范围。转换前后位置分别标明，以便与 BPS 校验路径对应。
+- 新按钮生成随机数字 PNG、additional_tools 虚拟 custom 声明、auto 和 parallel=false，由内存 gRPC 帧适配器调用 s.Forward，经过实际路由开关、账号、图片上传、上游和 SSE 链路。关闭路由或移除账号时不会转走普通通道；不执行客户端工具、不重放原始拖图数据。
+- 已对照 CPA 当前公开 v0.1.9 (`708082da2f851569984de395d25405e61c2bbc34`)：附件实现与此前 f4a2563 相同，无新的图片修正依据。插件和 CPA 都仅缺省时补 auto，显式 original/null 原样；没有证据据此将 original 改成 high。
+- 源码复核、格式化、JS 语法和三平台编译用于交付；遵照用户要求不运行测试、按钮或真实账号请求。0.1.7 是定位版本，未宣称桌面图片 400 已修复。
+
+## 0.1.6 桌面工具目录修复
+
+已确认的源码路径：宿主 openai_gateway_forward.go 的 Responses Lite 分支调用 normalizeOpenAIResponsesLiteTools，把 namespace 声明移到 input[].additional_tools；新版 Codex 的 custom exec 也可以直接位于该载体。插件旧 readTools 与诊断都只看顶层，可能得到空目录并注入“No client tools are available”，但原始 additional_tools 又被透传给 BPS。旧探测直接构造顶层工具，绕过了这一宿主转换。
+
+- 新 readToolGroups 统一收集顶层与 additional_tools；保留 function/custom、namespace、完整 description、JSON Schema 和 custom format。
+- additional_tools 在原位置转为 developer 中继目录，不再向 BPS 发送这份原生声明。目录与调用仍使用参考项目的 run_officejs 信封，不新增 BPS 原生执行能力。
+- 相同叶子定义去重，冲突明确拒绝；allowed_tools 和 none 同时约束所有来源的当前目录。KV 回放仍恢复完整历史调用，不受本轮 none 影响。
+- 最近请求诊断同时统计两处声明，并记录终态中转换前原生工具的有界类型/名称，不记录参数或正文。旧版“工具类型无”的盲点已修正。
+- 工具探测改用 additional_tools + namespace + custom，覆盖声明迁移、原始 input、SSE 转换和两轮回放；仍是模拟结果，不能取代真实文件读取或 Subagent 验收。
+
+本轮依据包括宿主现有实现、官方 additional_tools 文档及两个参考的既有中继协议，详见 FIELD_MAPPING。本轮未添加主动 tool_search、未猜测 namespace group tool_choice 的强制语义，也未修改用户全局 Subagent 偏好。
+
+交付时仅进行源码复核、Go 格式化和三平台编译、JS 语法检查、签名与打包；未运行测试或真实账号请求。升级后从 Codex 新任务依次验收读取 README.md、执行命令、显式委派一个 Subagent，再查看诊断中的实际工具来源/名称和调用数。
 
 ## 0.1.5 源码审查修复
 
@@ -35,4 +75,4 @@
 - 既有 UI 状态响应可乱序覆盖新探测并清除计时器；现状态查询串行执行。
 - 既有账号刷新使用旧窗口配置，可能覆盖其他窗口已保存的路由；现刷新前加载最新配置并提示变化，保留本地脏表单。宿主缺少原子条件保存接口，真正同时保存的竞争仍需避免。
 
-升级复用原发布者公钥：停用旧版、导入 0.1.5、启用并检查账号路由；从新任务开始。已保存的模型列表继续保留。图片传输新字段默认 attachment，passthrough 可对照旧行为；切换不会自动重试已发送请求。原 0.1.4 产物保留，修正包使用新版本号。
+升级复用原发布者公钥：停用旧版、导入 0.1.8、启用并检查账号路由与新实例号。已保存的模型列表继续保留。图片传输字段默认 attachment，passthrough 可对照旧行为；切换不会自动重试已发送请求。原 0.1.7 及更早产物保留，新包使用独立版本号。

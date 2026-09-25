@@ -11,7 +11,7 @@ import (
 
 const (
 	PluginID    = "local.sub2api.oai-basispoints"
-	Version     = "0.1.5"
+	Version     = "0.1.8"
 	Capability  = "openai.oauth.outbound_transport.v1"
 	bpsURL      = "https://bps.openai.com/basispoints/api/responses"
 	maxBody     = 8 << 20
@@ -39,6 +39,7 @@ type Command struct {
 	Model       string `json:"model,omitempty"`
 	Effort      string `json:"effort,omitempty"`
 	ImageDetail string `json:"image_detail,omitempty"`
+	ImageFormat string `json:"image_format,omitempty"`
 }
 
 var modelPattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]{0,119}$`)
@@ -106,7 +107,7 @@ func parseConfig(raw []byte) (Config, error) {
 		if !idPattern.MatchString(cmd.ID) || !idPattern.MatchString(cmd.Instance) || cmd.IssuedAt <= 0 {
 			return c, errors.New("操作标识无效，请重新打开插件页面")
 		}
-		if cmd.Action != "accounts" && cmd.Action != "probe" && cmd.Action != "probe_image" && cmd.Action != "probe_tools" {
+		if cmd.Action != "accounts" && cmd.Action != "probe" && cmd.Action != "probe_image" && cmd.Action != "probe_tools" && cmd.Action != "probe_image_route" {
 			return c, errors.New("不支持的操作")
 		}
 		if cmd.Action != "accounts" {
@@ -117,7 +118,13 @@ func parseConfig(raw []byte) (Config, error) {
 				return c, err
 			}
 		}
-		if cmd.Action == "probe_image" {
+		if cmd.Action == "probe_image" || cmd.Action == "probe_image_route" {
+			if cmd.ImageFormat == "" {
+				cmd.ImageFormat = "jpeg"
+			}
+			if cmd.ImageFormat != "jpeg" && cmd.ImageFormat != "png" {
+				return c, errors.New("图片探测格式只允许 jpeg/png")
+			}
 			if cmd.ImageDetail == "" {
 				cmd.ImageDetail = "high"
 			}

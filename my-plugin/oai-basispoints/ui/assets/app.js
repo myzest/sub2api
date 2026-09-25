@@ -4,11 +4,12 @@
   let saved=model.config({}), snapshot=null, busy=false, timer=null, closed=false, observedInstance='';
   let statusTail=Promise.resolve();
   let statusFailed=false;
+  const diagnosticSelections={request:{id:'',record:null},image:{id:'',record:null}};
   function notice(text,error=false){$('notice').textContent=text;$('notice').classList.toggle('error',error);}
   function buttons(){
     const running=snapshot?.probe?.state==='running';
-    for(const id of ['save','refresh','probe','probe-image','probe-tools'])$(id).disabled=busy||!snapshot?.host_ready||(id.startsWith('probe')&&running);
-    $('refresh-diagnostic').disabled=busy||!snapshot;
+    for(const id of ['save','refresh','probe','probe-image','probe-image-route','probe-tools'])$(id).disabled=busy||!snapshot?.host_ready||(id.startsWith('probe')&&running);
+    for(const id of ['refresh-diagnostic','refresh-image-diagnostic'])$(id).disabled=busy||!snapshot;
   }
   function refreshModels(){const old=$('probe-model').value;$('probe-model').replaceChildren(...model.models($('models').value).map(name=>new Option(name,name)));if([...$('probe-model').options].some(o=>o.value===old))$('probe-model').value=old;}
   function populate(c){$('route-enabled').checked=c.route_enabled;$('models').value=c.models.join('\n');$('effort').value=c.default_effort==='max'?'xhigh':c.default_effort;$('ultra').checked=c.allow_ultra;$('timeout').value=c.timeout_seconds;$('ttl').value=c.replay_ttl_seconds/3600;$('image-transport').value=c.image_transport;refreshModels();renderAccounts(c.account_ids);}
@@ -29,6 +30,29 @@
   async function save(command,keepForm=false){const config=keepForm?{...saved}:form();if(command)config.command=command;const response=await bridge.call('config.save',{config});saved=model.config(response.config||config);return saved;}
   async function test(cmd){const r=await bridge.call('config.test');const payload=model.parseJSON(r.result.status_json||'{}');if(payload.command_id!==cmd.id)throw new Error('另一个插件窗口更改了操作，请刷新后重试。');if(!r.result.success)throw new Error(r.result.message);return payload;}
   function command(action){return {id:bridge.uuid(),instance:snapshot.instance,issued_at:Math.floor(Date.now()/1000),action};}
+  function renderDiagnostic(kind){
+    const imageOnly=kind==='image', selection=diagnosticSelections[kind];
+    const records=model.diagnosticHistory(snapshot,imageOnly);
+    const select=$(imageOnly?'image-request-history':'request-history');
+    if(selection.id){
+      const found=records.find(r=>r.id===selection.id);
+      if(found)selection.record=found;
+    }
+    const options=[new Option('最新完成请求（刷新时自动跟随）',''),...records.map(r=>new Option(model.requestLabel(r),r.id))];
+    if(selection.id&&selection.record&&!records.some(r=>r.id===selection.id))options.push(new Option(`${model.requestLabel(selection.record)} · 已移出当前保留窗口`,selection.id));
+    select.replaceChildren(...options);select.value=selection.id;select.disabled=records.length===0&&!selection.record;
+    const record=selection.id?selection.record:records[0];
+    const result=$(imageOnly?'image-request-diagnostic':'request-diagnostic');
+    result.textContent=record?model.requestText(record):imageOnly?'本实例尚未记录到已结束的图片路由请求。请在 Codex 中发送图片后刷新；进行中的请求会在结束后显示。':model.requestText(null);
+    result.dataset.state=record&&(record.error||record.http_status>=400||record.attachment_http_status>=400)?'failed':'';
+    $(imageOnly?'image-diagnostic-runtime':'diagnostic-runtime').textContent=model.diagnosticRuntime(snapshot);
+  }
+  function renderDiagnostics(reset=false){
+    for(const kind of ['request','image']){
+      if(reset){diagnosticSelections[kind].id='';diagnosticSelections[kind].record=null;}
+      renderDiagnostic(kind);
+    }
+  }
   function status(){
     // Serialize passive polling and post-command refreshes. An older response
     // must never replace a newer probe or cancel its polling timer.
@@ -47,10 +71,10 @@
     $('runtime').textContent=snapshot.host_ready?'宿主已连接':'等待 HostService v2';
     $('probe-result').textContent=model.probeText(snapshot.probe);$('probe-result').dataset.state=snapshot.probe?.state||'';
     $('probe-result').setAttribute('aria-busy',String(snapshot.probe?.state==='running'));
-    const preview=snapshot.probe?.kind==='image'?model.imagePreview(snapshot.probe.image_preview):'';
+    const preview=['image','image_route'].includes(snapshot.probe?.kind)?model.imagePreview(snapshot.probe.image_preview):'';
     $('image-preview').hidden=!preview;
     if(preview){if($('image-preview-img').getAttribute('src')!==preview)$('image-preview-img').src=preview;}else $('image-preview-img').removeAttribute('src');
-    $('request-diagnostic').textContent=model.requestText(snapshot.last_request);$('request-diagnostic').dataset.state=snapshot.last_request?.error?'failed':'';
+    renderDiagnostics(Boolean(previous?.instance&&previous.instance!==snapshot.instance));
     if(statusFailed){notice('状态查询已恢复。');statusFailed=false;}
     if(observedInstance&&observedInstance!==snapshot.instance)notice('插件已重启；请检查保存的设置。',true);observedInstance=snapshot.instance;buttons();
     success=true;
@@ -75,13 +99,23 @@
   async function probe(action){
     if(snapshot?.probe?.state==='running')throw new Error('已有探测正在运行，请等待结果后重试。');
     const cmd={...command(action),account_id:Number($('probe-account').value),model:$('probe-model').value,effort:$('probe-effort').value};
-    if(action==='probe_image')cmd.image_detail=$('image-detail').value;
+    if(action==='probe_image'||action==='probe_image_route'){
+      cmd.image_detail=$('image-detail').value;
+      cmd.image_format=$('image-format').value;
+    }
     if(!cmd.account_id||!cmd.model)throw new Error('请选择可用账号和模型。');
     await save(cmd);await test(cmd);
-    notice(`设置已保存，${action==='probe_image'?'图片':action==='probe_tools'?'工具':'文本'}探测已启动，结果会自动更新；最长等待 120 秒。`);await status();
+    const kind={probe_image:'图片',probe_image_route:'图片路由',probe_tools:'工具',probe:'文本'}[action];
+    notice(`设置已保存，${kind}探测已启动，结果会自动更新；最长等待 120 秒。`);await status();
   }
-  for(const [id,action] of [['probe','probe'],['probe-image','probe_image'],['probe-tools','probe_tools']])$(id).addEventListener('click',()=>run(()=>probe(action)));
-  $('refresh-diagnostic').addEventListener('click',()=>run(async()=>{await status();notice('最近路由请求诊断已刷新，未发送上游请求。');}));
+  for(const [id,action] of [['probe','probe'],['probe-image','probe_image'],['probe-image-route','probe_image_route'],['probe-tools','probe_tools']])$(id).addEventListener('click',()=>run(()=>probe(action)));
+  for(const id of ['refresh-diagnostic','refresh-image-diagnostic'])$(id).addEventListener('click',()=>run(async()=>{await status();notice('路由诊断与历史已刷新，未发送上游请求。');}));
+  for(const [id,kind] of [['request-history','request'],['image-request-history','image']])$(id).addEventListener('change',()=>{
+    const selection=diagnosticSelections[kind];selection.id=$(id).value;
+    if(!selection.id)selection.record=null;
+    else selection.record=model.diagnosticHistory(snapshot,kind==='image').find(r=>r.id===selection.id)||selection.record;
+    renderDiagnostic(kind);
+  });
   $('models').addEventListener('input',refreshModels);
   addEventListener('pagehide',()=>{closed=true;clearTimeout(timer);});
   async function init(){bridge.ready();const r=await bridge.call('config.load');saved=model.config(r.config);populate(saved);await status();notice(snapshot.last_error||'先探测一个账号，再启用 BPS 路由。',Boolean(snapshot.last_error));}
