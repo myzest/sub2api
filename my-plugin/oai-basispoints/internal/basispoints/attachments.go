@@ -20,23 +20,26 @@ import (
 // Wire behavior follows cpa-plugin-oai-basispoints f4a2563 attachments.go:
 // POST a multipart file, then replace the data URL with openai_file_id.
 type attachmentReport struct {
-	Uploaded    int                         `json:"uploaded"`
-	Reused      int                         `json:"reused"`
-	Images      []attachmentImageDiagnostic `json:"images,omitempty"`
-	HTTPStatus  int                         `json:"http_status,omitempty"`
-	ContentType string                      `json:"content_type,omitempty"`
-	RequestID   string                      `json:"request_id,omitempty"`
-	Diagnostic  string                      `json:"diagnostic,omitempty"`
+	Uploaded        int                         `json:"uploaded"`
+	Reused          int                         `json:"reused"`
+	Attempts        int                         `json:"attempts"`
+	Images          []attachmentImageDiagnostic `json:"images,omitempty"`
+	HTTPStatus      int                         `json:"http_status,omitempty"`
+	ContentType     string                      `json:"content_type,omitempty"`
+	RequestID       string                      `json:"request_id,omitempty"`
+	Diagnostic      string                      `json:"diagnostic,omitempty"`
+	DiagnosticState string                      `json:"diagnostic_state,omitempty"`
 }
 
 // Only generated filenames and protocol metadata, never original filenames,
 // file IDs, credentials or image content. Bounded to 16 entries per request.
 type attachmentImageDiagnostic struct {
-	Path     string `json:"path"`
-	Filename string `json:"filename"`
-	MIME     string `json:"mime"`
-	Bytes    int    `json:"bytes"`
-	State    string `json:"state"`
+	Path       string `json:"path"`
+	Filename   string `json:"filename"`
+	MIME       string `json:"mime"`
+	Bytes      int    `json:"bytes"`
+	State      string `json:"state"`
+	HTTPStatus int    `json:"http_status,omitempty"`
 }
 
 // The observed BPS validation lists .jpeg/.jpg/.png/.gif/.webp. Go's MIME
@@ -188,6 +191,9 @@ func (s *Server) uploadInputImages(ctx context.Context, plan *requestPlan, heade
 			id, reused, err := s.attachments.obtain(key, func() (string, error) {
 				return s.uploadImage(ctx, endpoint, headers, proxy, mediaType, name, data, dataURL, report)
 			})
+			if !reused {
+				info.HTTPStatus = report.HTTPStatus
+			}
 			if err == nil {
 				info.State = "uploaded"
 				if reused {
@@ -226,6 +232,11 @@ func (s *Server) uploadInputImages(ctx context.Context, plan *requestPlan, heade
 }
 
 func (s *Server) uploadImage(ctx context.Context, endpoint string, headers http.Header, proxy, mediaType, name string, data []byte, dataURL string, report *attachmentReport) (string, error) {
+	// These fields describe the latest upload attempt, never an earlier
+	// successful image when a subsequent request fails before receiving HTTP.
+	report.Attempts++
+	report.HTTPStatus = 0
+	report.ContentType, report.RequestID, report.Diagnostic, report.DiagnosticState = "", "", "", ""
 	var body bytes.Buffer
 	w := multipart.NewWriter(&body)
 	ph := make(textproto.MIMEHeader)
@@ -260,17 +271,16 @@ func (s *Server) uploadImage(ctx context.Context, endpoint string, headers http.
 	report.HTTPStatus = resp.StatusCode
 	report.ContentType, _, _ = mime.ParseMediaType(resp.Header.Get("Content-Type"))
 	report.RequestID = redactProbeText(resp.Header.Get("X-Request-Id"), headers, dataURL)
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, (64<<10)+1))
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		// A missing/oversized error body must not turn an observed HTTP
 		// rejection into an uncertain transport error in the host scheduler.
-		if err == nil && len(raw) <= 64<<10 {
-			if value, parseErr := decodeObject(raw); parseErr == nil {
-				report.Diagnostic = probeDiagnostic(value, headers, dataURL)
-			}
-		}
+		// Use the production error projection, including URL, quoted-value
+		// and opaque-value redaction. Cover both original and decoded encodings.
+		request := object{"input": []any{dataURL, base64.StdEncoding.EncodeToString(data)}}
+		report.Diagnostic, report.DiagnosticState = readUpstreamDiagnostic(resp.Body, headers, nil, request)
 		return "", &attachmentError{status: resp.StatusCode, code: "bps_attachment_http", text: fmt.Sprintf("BPS 图片上传返回 HTTP %d；尚未发送识图请求", resp.StatusCode), sent: true, headers: responseHeaders(resp.Header)}
 	}
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, (64<<10)+1))
 	if err != nil || len(raw) > 64<<10 {
 		return "", &attachmentError{code: "bps_attachment_response", text: "图片上传响应读取失败或超过 64 KiB", sent: true}
 	}

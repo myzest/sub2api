@@ -1,4 +1,4 @@
-# 字段处理与源码依据（0.1.8）
+# 字段处理与源码依据（0.1.9）
 
 这里的“有依据”指参考仓库已实现该行为，不代表本插件已在用户桌面端或 BPS 实机验证。用户已要求自行验收，本次不运行测试或探测。
 
@@ -29,7 +29,7 @@
 | function/custom 调用 | 插件句柄恢复 KV 中的完整原生 item；外部完整历史按 CPA/Excel fallback 构造历史 run_officejs 调用，保留 namespace 与原始 payload；JSON 解码使用 UseNumber 保留大整数精度 |
 | function/custom 结果 | 保留 output 结构及扩展字段，恢复原生 call_id、function_call_output 类型和 fc_ ID，按 CPA v0.1.8 删除客户端 name/namespace；null 或空白字符串补为参考项目的成功占位文本 |
 
-工具回放保留多账号隔离：本插件句柄绑定宿主账号、会话、模型和随机句柄，校验过期及调用内容，缺失或过期不会转入 fallback。0.1.8 对非插件句柄接入参考项目的历史 fallback：只消费本请求提供的完整调用及配对结果，不跨账号读 KV、不发起旧工具执行。不以当前工具目录或 tool_choice 重新限制已经执行的历史（对应 Excel 的历史处理）；它们仍限制新输出。缺失/重复/乱序结果、无效参数或异常插件标记仍拒绝。跨模型的加密状态与跨通道文件 ID 不在此修复范围。
+工具回放保留多账号隔离：本插件句柄绑定宿主账号、会话、模型和随机句柄，校验过期及调用内容，缺失或过期不会转入 fallback。0.1.8 对非插件句柄接入参考项目的历史 fallback：只消费本请求提供的完整调用及配对结果，不跨账号读 KV、不发起旧工具执行。不以当前工具目录或 tool_choice 重新限制已经执行的历史（对应 Excel 的历史处理）；它们仍限制新输出。缺失/重复/乱序结果、无效参数或异常插件标记仍拒绝。0.1.9 区分空字符串 custom input 与缺失/非字符串值，拒绝对象、数组、数字等 namespace 值（缺省/null 仍按未指定命名空间处理）；重复已知前缀内的 bp_ 标记仍属于异常插件句柄，不进入 fallback。跨模型的加密状态与跨通道文件 ID 不在此修复范围。
 
 ## 顶层请求
 
@@ -89,4 +89,11 @@
 - 附件文件名/MIME/长度摘要与 JPEG/PNG 探测选择属于本地观测及生成样本，不是新增上游协议。原有 PNG 探测通过不能覆盖 JPEG 路径。
 - 旧工具历史依据：[CPA `fallbackTransportCall` / `translateInputItems`](https://github.com/JaxsonWang/cpa-plugin-oai-basispoints/blob/708082da2f851569984de395d25405e61c2bbc34/internal/basispoints/protocol.go)、[Excel `_fallback_transport_call` / `translate_input_items`](https://github.com/Kaixxrua/excel-codex-bridge/blob/b2d6f2529b6ffa9f1a630f17b7037ef6dcc0480a/src/excel_codex_bridge/excel_upstream.py)。用户确认在切换通道/模型或继续旧任务后遇到非插件句柄错误，本版取消对完整外部历史的无条件拒绝；不把缺失参数补为空对象，也不为孤立结果编造调用。
 
-这里只承诺字段处理与所列源码行为对应；不增加原生搜索/计算机/MCP/tool_search 映射、独立 compact/input_tokens 端点、凭据交换或新的后台操作。客户端未声明工具、非法 JSON、失效回放等严格错误仍保留。工具结果中的图片目前只透传；没有根据用户消息附件的规则猜测另一种上传协议。
+## 0.1.9 审查修正
+
+- `sameCall` 原先使用 `str` 比较 custom input，导致空字符串与缺失/null/错误类型相等；现在要求两侧都为原始字符串。对象、数组、数字等错误类型的 namespace 不再静默退化为无 namespace。
+- `replayHandleKind` 原先只剥一个前缀，`call_ctc_bp_…` 可被当作外部历史；现在仅为识别保留标记而逐层剥离已知前缀，并将其判为无效插件句柄，不增加可加载的 KV ID 格式。
+- `attachmentReport` 的 HTTP 字段原先跨图片共用且未在新尝试前清空；现在逐次重置，记录尝试次数与逐图 HTTP。UI 将汇总字段标为最近一次上传尝试，区分全缓存命中和后续上传未收到 HTTP 响应。
+- 附件非 2xx 改用 `readUpstreamDiagnostic`，与 Responses 共用大小上限、已知请求值/引号内容/URL/不透明串脱敏和采集状态。保留上传状态及限流响应头，不把诊断读取失败改判为未知网络错误。
+
+以上修改来自本地可达代码路径审查，不引入新的 BPS 请求字段、上传协议、自动重试或执行能力。这里只承诺字段处理与所列源码行为对应；不增加原生搜索/计算机/MCP/tool_search 映射、独立 compact/input_tokens 端点、凭据交换或新的后台操作。客户端未声明工具、非法 JSON、失效回放等严格错误仍保留。工具结果中的图片目前只透传；没有根据用户消息附件的规则猜测另一种上传协议。

@@ -2,14 +2,14 @@
 
 独立的 Sub2API `.s2plugin` 插件，使用已有 OpenAI OAuth 账号，将选定账号的 Responses 请求转换为 BPS 协议。源码和生成文件都在此目录；不需要二改 Sub2API 主程序。
 
-这是 **0.1.8 图片附件与旧工具历史兼容版本**。根据用户的 JPEG / HTTP 400 诊断，固定附件扩展名并增加文件名、MIME 摘要；图片探测增加 JPEG/PNG 选择，默认 JPEG。按两个参考实现补齐完整外部 function/custom 调用历史的中继转换，解决旧任务切入 BPS 时直接因非插件 ID 被拒的问题。本插件生成的句柄继续严格恢复 KV 原生状态。已保留工具目录兼容与独立图片诊断，真实识图和旧任务续接仍由用户验收。逐项来源和边界见 [FIELD_MAPPING.md](FIELD_MAPPING.md)，交付记录见 [VALIDATION.md](VALIDATION.md)。
+这是 **0.1.9 源码审查修复版本**。修复空 custom input 与错误类型混同、重复前缀误判外部历史、多图上传显示过期 HTTP 状态及附件错误脱敏不一致的问题。保留 0.1.8 的固定图片扩展名、JPEG/PNG 探测和完整外部工具历史转换。真实识图和旧任务续接仍由用户验收。逐项来源和边界见 [FIELD_MAPPING.md](FIELD_MAPPING.md)，交付记录见 [VALIDATION.md](VALIDATION.md)。
 
 ## 安装
 
 适用宿主：本工作区对应 fork 的插件机制，Plugin Protocol / Transport API / UI Bridge v1，**HostService v2**。清单声明 `>=0.2.8 <0.3.0`，版本号本身不能替代这些接口要求；没有在你的服务器镜像上验收。
 
 1. 将 `dist/trusted-publisher.yaml` 中公钥条目合并到服务器已有配置的 `plugins.trusted_publishers`，保留其他发布者，保持 `allow_unsigned: false`。首次添加公钥后重启 Sub2API。
-2. 在插件管理中导入 `dist/oai-basispoints-0.1.8.s2plugin`。包内包含 Linux amd64、Linux arm64、macOS arm64 运行文件。
+2. 在插件管理中导入 `dist/oai-basispoints-0.1.9.s2plugin`。包内包含 Linux amd64、Linux arm64、macOS arm64 运行文件。
 3. 启用本插件。如果已有 OpenAI OAuth 出站插件处于启用状态，先停用它：宿主的 `openai.oauth.outbound_transport.v1` 只有一个启用槽位，不能与 GPT Inspector 同时占用。
 4. 将宿主此插件能力的灰度比例设为 **100%**，再通过本插件的账号白名单控制 BPS 路由。比例低于 100% 时，部分选定账号可能根本到不了插件。
 5. 打开插件设置，刷新账号。在保持 BPS 路由关闭的情况下，选一个账号、模型和 effort，点击“保存并探测文本”。图片、工具探测也在这里；每项总共最多等待 120 秒，只有点击探测才发上游请求。
@@ -75,6 +75,8 @@
 
 外部历史指不含本插件 `bp_` 标记的 function/custom 调用：参考 CPA `fallbackTransportCall` 与 Excel `_fallback_transport_call`，按完整工具名（包括 namespace）、原始字符串 input 或 JSON 对象 arguments 构造历史 run_officejs 信封，并配对原 call_id 的结果。它只重建本次请求已提供的历史，不读取其他账号 KV、不保存新执行状态，也不会把旧调用发送给客户端执行。工具已退出本轮目录或 tool_choice=none 不妨碍历史重建；这些限制仍约束新输出调用。缺失 ID/名称/参数、结果早于调用、重复或缺少结果均明确失败，不猜测参数、不丢弃历史。原始 BPS 服务端私有状态无法由普通客户端历史还原，跨通道续接并非无条件保证。
 
+0.1.9 的回放比较区分合法空字符串 input 与缺失/null/非字符串 input，拒绝会被误当作无 namespace 的对象、数字等错误类型。重复叠加 `fc_` / `ctc_` / `call_` 后仍带 `bp_` 标记的 ID 归为异常插件句柄并拒绝，不会降级为外部历史；这不扩大有效 KV 句柄的格式。
+
 宿主开启 `codex_fingerprint_mode=session/full` 时可能合并出站会话 ID。随机句柄能防止简单猜测，但现有插件接口**不能证明原始 API Key 级别的严格隔离**。不要将该机制描述为完整租户授权边界。
 
 默认工具回放保留 24 小时，可设置 5 分钟至 7 天。KV 会保存原生工具参数及客户端调用，可能包含业务内容；不保存 OAuth token 或工具执行结果。插件自身也校验过期时间，实际持久化能力取决于宿主 KV / Redis 配置。
@@ -98,6 +100,8 @@
 定位拖图 400 时，先运行“保存并探测图片路由”，再在 Codex 新任务拖入图片，点击“刷新图片诊断”选择对应客户端记录。优先比较附件是否成功、转换后的图片来源、detail，以及上游 error.param/校验路径。不要仅凭 400 判定 original、某模型或图片能力不受支持；本版没有自动改 detail、删图或重试。
 
 0.1.8 附件摘要另显示最多 16 张图的上游位置、插件生成的文件名、MIME、原图字节数和上传/复用状态，不记录原始文件名。旧任务诊断增加历史工具项计数与 ID 分类（插件/外部/缺失/异常），不显示真实 call_id 或参数。升级后首次发同图应显示新上传以及 `image.jpg / image/jpeg`；如果仍报 `got none`，该记录可区分文件名修正是否生效，不能仅凭本次代码修正宣称远端问题已解决。
+
+0.1.9 增加附件上传尝试次数与逐图 HTTP 状态。汇总 HTTP、Content-Type、Request ID 和错误采集状态仅表示最近一次上传尝试：前图成功、后图取消或连接失败时不会沿用之前的 HTTP 200；有缓存命中也不会掩盖后续上传失败。仅命中缓存时显示“缓存复用，无上传请求”。附件非 2xx 与 Responses 使用同一套受限脱敏规则；缺少错误详情时显示读取失败、超限、非 JSON 等采集原因。
 
 状态查询串行处理，短暂失败后每 5 秒重试只读查询，不重发探测。刷新账号先读取服务器当前配置，保留本窗口未保存的表单；检测到配置变化会提示。宿主没有条件保存接口，跨窗口同时保存仍无法原子协调，请避免同时修改多个设置窗口。
 

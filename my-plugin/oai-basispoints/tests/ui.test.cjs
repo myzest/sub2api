@@ -14,6 +14,13 @@ test('probe result distinguishes reachability from quality and shows real model'
   const text=model.probeText({state:'succeeded',account_id:7,model:'gpt-5.6-sol',effort:'high',returned_model:'actual-model',http_status:200,message:'可访问；不代表模型质量验收',latency_ms:1200});
   assert.match(text,/actual-model/);assert.match(text,/不代表模型质量/);assert.match(text,/1.2 秒/);
 });
+test('cached images do not hide a later upload without an HTTP response',()=>{
+  const text=model.requestText({account_id:7,attachment:{uploaded:1,reused:1,attempts:2,images:[{path:'input[1].content[1]',state:'failed'}]}});
+  assert.match(text,/上传尝试 2 次/);
+  assert.match(text,/附件 HTTP：未收到上传响应/);
+  assert.doesNotMatch(text,/缓存复用，无上传请求/);
+  assert.match(text,/上传失败 · 未收到上传响应/);
+});
 test('bridge rejects forged messages and resolves only the matching parent/token/request',async()=>{
   const handlers={},sent=[],timers=new Map();let timerID=0;
   const parent={postMessage:(message)=>sent.push(message)};

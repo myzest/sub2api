@@ -131,12 +131,16 @@ func (r replayStore) load(ctx context.Context, handle string) (*replayRecord, er
 
 func sameCall(a, b object) bool {
 	for _, k := range []string{"type", "name", "namespace"} {
-		if str(a, k) != str(b, k) {
+		left, leftOK := a[k].(string)
+		right, rightOK := b[k].(string)
+		if (!leftOK && a[k] != nil) || (!rightOK && b[k] != nil) || left != right {
 			return false
 		}
 	}
 	if str(a, "type") == "custom_tool_call" {
-		return str(a, "input") == str(b, "input")
+		input, inputOK := a["input"].(string)
+		expected, expectedOK := b["input"].(string)
+		return inputOK && expectedOK && input == expected
 	}
 	x, err := decodeObject([]byte(str(a, "arguments")))
 	if err != nil {

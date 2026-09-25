@@ -81,18 +81,26 @@
   function diagnosticRuntime(snapshot) {
     return `当前插件：${snapshot?.version?`v${snapshot.version}`:'版本未提供'} · 实例：${snapshot?.instance||'尚未连接'}`;
   }
+  function diagnosticStateText(state) {
+    const states={captured:'已采集脱敏校验信息',empty:'错误响应体为空',no_fields:'错误 JSON 不包含可采集的校验字段',non_json:'错误响应不是 JSON',invalid_json:'错误 JSON 无法解析',too_large:'错误响应超过采集上限',read_error:'错误响应读取失败'};
+    return states[state]||state;
+  }
   function attachmentText(a) {
-    const lines=[`附件：上传 ${a.uploaded||0} 张 · 复用 ${a.reused||0} 张`,
-      `附件 HTTP：${a.http_status||(a.reused?'缓存复用，无上传请求':'未收到上传响应')}`];
+    const hasAttempts=Number.isInteger(a.attempts)&&a.attempts>=0;
+    const status=a.http_status||(a.attempts>0?'未收到上传响应':a.reused?'缓存复用，无上传请求':hasAttempts?'无上传请求':'未收到上传响应');
+    const lines=[`附件：上传 ${a.uploaded||0} 张 · 复用 ${a.reused||0} 张${hasAttempts?` · 上传尝试 ${a.attempts} 次`:''}`,
+      `附件 HTTP：${status}${a.attempts>0?'（最近一次上传尝试）':''}`];
     if(a.content_type)lines.push(`附件 Content-Type：${a.content_type}`);
     if(a.request_id)lines.push(`附件 Request ID：${a.request_id}`);
+    if(a.diagnostic_state)lines.push(`附件错误采集：${diagnosticStateText(a.diagnostic_state)}`);
     if(a.diagnostic)lines.push(`附件诊断（已脱敏）：${a.diagnostic}`);
     if(Array.isArray(a.images)&&a.images.length){
       lines.push('附件文件字段（最多 16 项；插件生成的文件名）：');
       const states={uploaded:'已上传',reused:'缓存复用',failed:'上传失败'};
       for(const item of a.images.slice(0,16)){
         if(!item||typeof item!=='object')continue;
-        lines.push(`  位置=${item.path||'未知'} · 文件名=${item.filename||'未知'} · MIME=${item.mime||'未知'} · 原图=${item.bytes||0} bytes · ${states[item.state]||'状态未知'}`);
+        const http=item.http_status?` · HTTP=${item.http_status}`:hasAttempts&&item.state==='failed'?' · 未收到上传响应':'';
+        lines.push(`  位置=${item.path||'未知'} · 文件名=${item.filename||'未知'} · MIME=${item.mime||'未知'} · 原图=${item.bytes||0} bytes · ${states[item.state]||'状态未知'}${http}`);
       }
     }
     return lines;
@@ -133,8 +141,7 @@
     if(r.attachment)lines.push(...attachmentText(r.attachment));
     else if(r.attachment_http_status)lines.push(`附件 HTTP：${r.attachment_http_status}`);
     if(r.upstream_error_state){
-      const states={captured:'已采集脱敏校验信息',empty:'错误响应体为空',no_fields:'错误 JSON 不包含可采集的校验字段',non_json:'错误响应不是 JSON',invalid_json:'错误 JSON 无法解析',too_large:'错误响应超过采集上限',read_error:'错误响应读取失败'};
-      lines.push(`上游错误采集：${states[r.upstream_error_state]||r.upstream_error_state}`);
+      lines.push(`上游错误采集：${diagnosticStateText(r.upstream_error_state)}`);
     }
     if(r.upstream_error)lines.push(`上游诊断（已脱敏）：${r.upstream_error}`);
     if(r.terminal)lines.push(`结束状态：${valueText(r.terminal)}`);

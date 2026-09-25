@@ -14,10 +14,18 @@ func replayHandleKind(handle string) string {
 	if handlePattern.MatchString(handle) {
 		return "plugin"
 	}
-	value := handle
-	for _, prefix := range []string{"fc_", "ctc_", "call_"} {
-		if strings.HasPrefix(value, prefix) {
-			value = strings.TrimPrefix(value, prefix)
+	// Strip repeated known prefixes only to recognize the reserved family.
+	// They remain invalid: this does not normalize them into valid KV handles.
+	value := strings.TrimSpace(handle)
+	for {
+		previous := value
+		for _, prefix := range []string{"fc_", "ctc_", "call_"} {
+			if strings.HasPrefix(value, prefix) {
+				value = strings.TrimPrefix(value, prefix)
+				break
+			}
+		}
+		if value == previous {
 			break
 		}
 	}
@@ -36,6 +44,11 @@ func historicalTransportCall(item object) (object, error) {
 		return nil, errors.New("旧工具历史缺少有效 call_id；需要完整调用及对应结果")
 	}
 	name, namespace := str(item, "name"), str(item, "namespace")
+	if value := item["namespace"]; value != nil {
+		if _, ok := value.(string); !ok {
+			return nil, errors.New("旧工具历史的 namespace 必须为字符串")
+		}
+	}
 	if name == "" || len(name) > 512 || len(namespace) > 512 || strings.ContainsAny(name+namespace, "\r\n\t ") {
 		return nil, errors.New("旧工具历史缺少有效工具名称")
 	}
