@@ -50,9 +50,16 @@
     <figure id="image-preview" hidden><img id="image-preview-img" alt="本次图片探测生成的数字图"><figcaption class="hint">本次探测图片。正确答案与实际回复见上方结果。</figcaption></figure>
     <p class="hint">探测成功只代表本次链路结果，不能证明模型“不降智”或所有 Codex 功能均可用。</p>
   </section>
+  <section aria-labelledby="generation-title">
+    <h2 id="generation-title">Codex 生图与改图</h2>
+    <p class="hint">按 Excel bridge 0.4.6 接入 BPS 独立 Images 接口，复用已选账号的 OAuth。升级插件后，在 Codex 当前 provider 的配置中合并以下请求头；保留原有 base_url、API Key 和其他请求头，不要重复创建相同配置项。</p>
+    <pre class="result">http_headers = { "x-openai-actor-authorization" = "excel-codex-bridge" }</pre>
+    <p class="hint">例如 model_provider = "custom" 时，该行属于 [model_providers.custom]。Windows 文件为 %USERPROFILE%\.codex\config.toml，macOS 为 ~/.codex/config.toml。这是客户端提供 image_gen 工具所需的标记，不是新凭据；配置完成后完全退出并重开 Codex。由其他工具管理配置时，请修改对应 provider 配置。</p>
+    <p class="hint">宿主分组需允许生图，gpt-image-2 应能调度到已选 BPS 账号，账号的图片工具策略不能为“拦截”。固定使用 gpt-image-2 / PNG，支持 auto、1024x1024、1536x1024、1024x1536、1280x720；不支持透明背景、蒙版或流式图片。原有图片探测按钮验证识图；生图请在 Codex 中请求一次并在下方查看 Images 诊断。</p>
+  </section>
   <section aria-labelledby="image-diagnostic-title">
     <div class="section-title"><h2 id="image-diagnostic-title">图片路由诊断</h2><div class="actions"><button id="refresh-image-diagnostic" class="secondary" type="button">刷新图片诊断</button><button id="clear-image-diagnostics" class="secondary" type="button">清空全部诊断历史</button></div></div>
-    <p class="hint">独立保留本实例最近 10 次已结束的输入图片请求，普通文本请求不会覆盖它们。拖图失败后可在这里选择对应的 HTTP 400 记录，查看附件上传、Responses 响应和图片字段摘要。生图请求请查看下方“最近路由请求”；识图探测通过不代表生图可用。刷新只读取状态，不发送上游请求。</p>
+    <p class="hint">独立保留本实例最近 10 次已结束的识图、生图与改图请求，普通文本请求不会覆盖它们。生图/改图显示 Images 接口状态与输出条目数；识图显示附件及 Responses 状态。识图探测通过不代表生图可用。刷新只读取状态，不发送上游请求。</p>
     <p id="image-diagnostic-runtime" class="hint">当前插件版本与实例：等待连接</p>
     <label for="image-request-history">图片请求历史</label>
     <select id="image-request-history" disabled><option value="">最新完成请求（刷新时自动跟随）</option></select>
@@ -68,7 +75,7 @@
     <select id="request-history" disabled><option value="">最新完成请求（刷新时自动跟随）</option></select>
     <div id="request-diagnostic" class="result" role="status" aria-live="polite">尚无已结束的 BPS 路由请求。</div>
   </section>
-  <footer>v0.1.11 · 支持清空诊断历史与未桥接工具提示；原生生图、搜索与 /responses/compact 暂未接入。</footer>
+  <footer>v0.1.12 · 接入 BPS 生图/改图接口与 Codex 客户端配置说明；hosted image_generation、原生搜索与 /responses/compact 暂未接入。</footer>
 </main>
 <script src="assets/bridge-v1.js"></script><script src="assets/model.js"></script><script src="assets/app.js"></script>
 </body></html>

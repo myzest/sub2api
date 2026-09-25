@@ -2,14 +2,14 @@
 
 独立的 Sub2API `.s2plugin` 插件，使用已有 OpenAI OAuth 账号，将选定账号的 Responses 请求转换为 BPS 协议。源码和生成文件都在此目录；不需要二改 Sub2API 主程序。
 
-这是 **0.1.11 诊断历史与生图能力定位版本**。新增“清空全部诊断历史”，清空后只保留新进入诊断的请求，旧的在途请求结束后不会回到列表；其他已打开窗口刷新时也会释放旧记录。诊断明确显示未桥接工具类型及原生生图声明。保留 0.1.10 的信封兼容、完整历史转换和三轮工具探测。用户已反馈识图可用，原生生图尚未接入；本轮未运行功能测试或真实账号探测。源码依据见 [FIELD_MAPPING.md](FIELD_MAPPING.md)，交付记录见 [VALIDATION.md](VALIDATION.md)。
+这是 **0.1.12 Codex 生图与改图接口版本**。依据最新 Excel bridge `66c41df` 接入 BPS `/images/generations` 和 `/images/edits`，复用宿主 OAuth 和账号代理，补齐客户端启用 `image_gen.imagegen` 所需的 provider 请求头说明。生图及改图进入独立图片诊断，保留原有识图、工具回放和清空历史能力。用户已反馈识图可用，本轮新增的生图/改图尚待用户实测。源码依据见 [FIELD_MAPPING.md](FIELD_MAPPING.md)，交付记录见 [VALIDATION.md](VALIDATION.md)。
 
 ## 安装
 
 适用宿主：本工作区对应 fork 的插件机制，Plugin Protocol / Transport API / UI Bridge v1，**HostService v2**。清单声明 `>=0.2.8 <0.3.0`，版本号本身不能替代这些接口要求；没有在你的服务器镜像上验收。
 
 1. 将 `dist/trusted-publisher.yaml` 中公钥条目合并到服务器已有配置的 `plugins.trusted_publishers`，保留其他发布者，保持 `allow_unsigned: false`。首次添加公钥后重启 Sub2API。
-2. 在插件管理中导入 `dist/oai-basispoints-0.1.11.s2plugin`。包内包含 Linux amd64、Linux arm64、macOS arm64 运行文件。Windows 上运行 Codex 客户端不要求服务端插件也有 Windows 运行文件。
+2. 在插件管理中导入 `dist/oai-basispoints-0.1.12.s2plugin`。包内包含 Linux amd64、Linux arm64、macOS arm64 运行文件。Windows 上运行 Codex 客户端不要求服务端插件也有 Windows 运行文件。
 3. 启用本插件。如果已有 OpenAI OAuth 出站插件处于启用状态，先停用它：宿主的 `openai.oauth.outbound_transport.v1` 只有一个启用槽位，不能与 GPT Inspector 同时占用。
 4. 将宿主此插件能力的灰度比例设为 **100%**，再通过本插件的账号白名单控制 BPS 路由。比例低于 100% 时，部分选定账号可能根本到不了插件。
 5. 打开插件设置，刷新账号。在保持 BPS 路由关闭的情况下，选一个账号、模型和 effort，点击“保存并探测文本”。图片、工具探测也在这里；每项总共最多等待 120 秒，只有点击探测才发上游请求。
@@ -40,7 +40,7 @@
 
 ## 工作原理与支持范围
 
-目标固定为 `https://bps.openai.com/basispoints/api/responses`。插件设置 ChatGPT 认证与 Excel 客户端 headers，发送 `model_selection: explicit`、`store: false` 和顶层 `reasoning_effort`。
+文本目标固定为 `https://bps.openai.com/basispoints/api/responses`。插件设置 ChatGPT 认证与 Excel 客户端 headers，发送 `model_selection: explicit`、`store: false` 和顶层 `reasoning_effort`。独立生图/改图使用同源 `/basispoints/api/images/generations` 和 `/basispoints/api/images/edits`，不发送上述文本专用字段。
 
 | 项目 | 行为 |
 | --- | --- |
@@ -49,6 +49,7 @@
 | 输入 | 普通项保留 type、role、phase、content 和扩展字段；只删除客户端专用 `internal_chat_message_metadata_passthrough`，reasoning、引用和工具回放另行处理 |
 | 流式 | 沿用客户端 stream；普通 SSE 事件、内容和扩展字段转发，工具完成校验后生成客户端工具事件。由于工具事件被重建，sequence_number 重新连续编号 |
 | 工具 | 从顶层 tools 与 input[].additional_tools 提取 function/custom、namespace；支持 allowed_tools；完整 schema / custom format 放入提示，function 参数用 JSON Schema 校验；遵守 parallel_tool_calls:false |
+| 生图 / 改图 | 独立 Images JSON 请求；gpt-image-2、PNG、参考支持的参数。生图发 JSON，改图转 multipart；响应 JSON 交给宿主计费和 Codex 图片执行器 |
 | 原生信封 | 接受 `run_officejs` / `functions.run_officejs` 的单 JSON 对象，可去除完整单一 JSON/无语言围栏、解开最多两层 name/arguments 原生信封；保留重复键、尾随内容、工具目录和 Schema 校验；不修非法转义、不执行 JS |
 | 工具回放 | KV 命中时校验并恢复原生 item；KV 未命中且有完整调用/结果时，按参考 fallback 转成历史输入；不跨范围读 KV、不执行旧调用 |
 | 终态 | 保留 failed/incomplete、usage、incomplete_details 与扩展字段；缺少终态、非法/重复工具、违反并行限制或原生身份不一致均报错，不伪装 completed |
@@ -95,11 +96,11 @@
 
 “保存并探测图片路由”：先保存当前设置，要求 BPS 路由已开启且所选账号在白名单内；沿用模型、effort、图片传输、所选 JPEG/PNG 格式和 detail，并带 `input.additional_tools`、`tool_choice=auto`、`parallel_tool_calls=false`。它经过实际 Forward 路由入口、附件、Responses 和 SSE 返回链路，结果写入图片请求历史；最多一次模型请求，附件模式另有一次上传。虚拟工具没有执行器，若模型返回调用则提示未完成识图验收。此按钮不会自动开启路由，也不是对用户拖图请求的原样重放。
 
-“图片路由诊断”独立保留本实例最近 10 条已结束的图片请求；“最近路由请求”保留最近 20 条。普通文字请求不会挤掉图片历史。可选择旧记录，切回“最新完成请求”后刷新会跟随最新。请求来源区分真实客户端和主动图片路由探测；显示版本、实例及诊断 ID，进程重启清空历史，刷新只读状态。
+“图片路由诊断”独立保留本实例最近 10 条已结束的图片请求，包括 0.1.12 新增的生图和改图；“最近路由请求”保留最近 20 条。普通文字请求不会挤掉图片历史。可选择旧记录，切回“最新完成请求”后刷新会跟随最新。请求来源区分真实客户端和主动图片路由探测；显示版本、实例及诊断 ID，进程重启清空历史，刷新只读状态。生图/改图单独显示 Images HTTP、操作类型与输出图片条目数，不保存 prompt、输入图片或生成图片内容。
 
 0.1.11 的“清空全部诊断历史”同时清空本实例所有设备的这两类摘要，显示上次清空时间。清空与请求归档使用同一把锁及代次校验：清空时已进入诊断的在途请求可以正常完成，但不重新进入列表。它不删除工具回放 KV、附件缓存、会话或单账号探测结果，不取消请求，也不调用上游。操作沿用 UI Bridge v1 的管理命令及实例/时效/重复 ID 校验；发送命令前加载服务器最新配置，不提交未保存的表单。跨窗口同时保存仍受宿主缺少条件保存接口的限制。
 
-定位某台设备的生图请求时，先让其他设备暂停新请求，清空后在目标设备重试，结束后刷新“最近路由请求”。一次用户任务可能包含读取技能等多次模型请求；应检查本次新增的各条记录。下拉项增加诊断 ID 前缀，详情列出未桥接类型；没有 `image_generation` 声明不能排除客户端通过 function/custom 或动态执行器提供生图工具。摘要名称最多 32 个，截断时会提示。没有输入图片的文生图请求不会进入“图片路由诊断”。
+定位某台设备的生图请求时，先让其他设备暂停新请求，清空后在目标设备重试，结束后刷新诊断。一次用户任务可能包含读取技能、调用工具、生图及最终回复等多次请求；应检查本次新增的各条记录。下拉项增加诊断 ID 前缀，详情列出未桥接类型；没有 hosted `image_generation` 声明不能排除客户端通过 function/custom 或动态执行器提供的 `image_gen.imagegen`。摘要名称最多 32 个，截断时会提示。0.1.12 的独立文生图请求即使输入图片为 0，也会进入“图片路由诊断”。
 
 图片摘要分别显示转换前后位置、来源（data URL、file_id、远程 URL 或对象等）、detail、MIME 与编码长度，最多 16 项；不保留图片内容、URL 或 file_id 值。附件诊断展示上传/复用数量与独立 HTTP；Responses 展示 HTTP、Request ID、请求大小和受限错误字段。上游错误体最多读取 64 KiB，仅提取 message/code/type/param/detail 中校验字段，去除 rejected input/ctx、已知请求值、凭据、URL 和长不透明字符串；非 JSON、过大或读取失败只记录原因，不保存完整错误体。客户端错误附本地诊断 ID，便于关联。工具诊断仍只保留类型、有界名称和数量。探测结果另外保留插件生成的图片和校验值。
 
@@ -115,7 +116,7 @@
 
 0.1.10 另有独立宿主源码修正：正常 Redis 缓存 miss 不再作为错误；日志区分传输响应错误、请求取消、WS 首帧阶段，并为选号失败补充上一失败状态。插件包不包含宿主二进制，这些宿主变化需要重新构建并部署 Sub2API 才会生效；插件不依赖它们。未改变 WS 超时、账号调度或重试策略。
 
-0.1.10 发行 ZIP 中的 `sub2api-bps-0.1.10-host.patch` 单独包含上述三处宿主文件改动，基于工作区提交 `089fe4ea1`。应用到其他 fork 前应检查差异；仅导入 `.s2plugin` 不会应用此补丁。0.1.11 没有新增宿主修改，发行 ZIP 不重复附带旧补丁。
+0.1.10 发行 ZIP 中的 `sub2api-bps-0.1.10-host.patch` 单独包含上述三处宿主文件改动，基于工作区提交 `089fe4ea1`。应用到其他 fork 前应检查差异；仅导入 `.s2plugin` 不会应用此补丁。0.1.11/0.1.12 没有新增宿主修改，发行 ZIP 不重复附带旧补丁。
 
 状态查询串行处理，短暂失败后每 5 秒重试只读查询，不重发探测。刷新账号先读取服务器当前配置，保留本窗口未保存的表单；检测到配置变化会提示。宿主没有条件保存接口，跨窗口同时保存仍无法原子协调，请避免同时修改多个设置窗口。
 
@@ -130,20 +131,33 @@
 | Subagent | 若客户端将其声明为上述 callable 类型，可按同样信封桥接；是否启用由客户端配置及当前用户授权决定 |
 | MCP / Apps | 以 function/custom 暴露时可进入目录；原生 mcp、tool_search 等服务端工具尚未映射 |
 | 输入图片 / 识图 | 用户消息 data URL 附件上传；用户已反馈识图成功，普通 URL/file_id 及工具输出图片仍由上游决定是否接受 |
-| 生成图片 | 原生 image_generation 尚未适配；客户端若提供 function/custom 生图工具，可按普通工具中继，仍依赖实际生图执行器与结果交付 |
+| 生成 / 编辑图片 | 0.1.12 适配客户端 image_gen.imagegen 使用的独立 Images 接口；需配置 provider 头并开启宿主分组生图。Responses hosted image_generation 未映射 |
 | 原生搜索、计算机、独立 compact/input_tokens、服务端会话 | 尚未接入，不能宣称完整恢复 |
 
 同账号/模型/题目/effort 的多轮质量比较仍应单独进行。HTTP 200、返回模型名、一次识图或工具探测通过，都不等于全部 Codex 能力或模型质量通过验收。
 
-## 生图排查与接入方案
+## 启用 Codex 生图与改图
 
-Windows 中“内置图片生成工具不可用，需要 OPENAI_API_KEY”的文字与 imagegen 技能的 API fallback 分支一致；仅有这段回答还不能证明客户端未提供工具。安装或读到 `SKILL.md` 不等于已拥有它引用的执行器，修改技能里的确认要求也不能补出生图后端。
+最新 [Excel bridge 0.4.6](https://github.com/Kaixxrua/excel-codex-bridge/tree/66c41df941fb1a963801964c75ff24b4a19e93f2) 补齐了此前固定参考版本没有的实现：Codex 客户端通过 provider 的 `x-openai-actor-authorization` 头启用本地 `image_gen.imagegen`，执行器向 provider 的 `/images/generations`、`/images/edits` 发送独立请求。这与 Responses 的 hosted `image_generation` 是两条不同链路。0.1.11 的“尚未接入”结论仅代表当时版本；0.1.12 已按新参考移植独立接口。
 
-先用清空后的实际请求区分两条路径：收到 callable 生图工具时，核对其目录、工具选择、输出调用及客户端执行结果；收到原生 `image_generation` 时，当前 BPS 目录不会收录，需另做原生工具执行和图片结果适配。两个固定参考版本没有提供可直接移植的原生生图桥接依据，本版没有盲目放行该类型。
+1. 先在服务器停用旧版、导入并启用 0.1.12，保持 BPS 账号白名单。账号所属分组必须允许生图，并能将 `gpt-image-2` 调度到选中的 BPS OAuth 账号；不要把这个图片模型映射成文字模型。插件“允许的模型”是 Responses 文字模型列表，无需为生图追加 `gpt-image-2`。宿主账号的图片工具策略应选择“继承/允许”，不能为“拦截”。
+2. 修改发起任务的那台电脑的 Codex provider 配置。Windows 为 `%USERPROFILE%\.codex\config.toml`，macOS 为 `~/.codex/config.toml`。在当前 provider 表中合并下面一行；`custom` 应与文件中的 `model_provider` 值一致，保留原 `base_url`、鉴权及其他请求头，不要重复创建同名表或重复键。完整说明见 [codex-imagegen.example.toml](codex-imagegen.example.toml)。
 
-宿主已存在 `/v1/images/generations` 和 `/v1/images/edits`，在 `backend/internal/service/openai_images.go`、`openai_images_direct.go`、`openai_images_responses.go` 中有 OAuth 生图路径。这证明本地源码存在实现，不证明当前服务器部署、账号权限或客户端配置可用。优先考虑让独立的客户端 function/MCP 生图执行器调用这个普通生图通道，再把图片保存和交付给客户端；文本与工具规划继续走 BPS。应使用允许生图且不选中 BPS 路由账号的专用分组，因为插件当前会拒绝这些账号的非 `/responses` 端点，且不会把原生生图工具送进 BPS。执行器仍需自己的接口鉴权；不能未经验证将 Sub2API Key 填入只连接官方地址的 fallback 脚本。
+   ```toml
+   [model_providers.custom]
+   http_headers = { "x-openai-actor-authorization" = "excel-codex-bridge" }
+   ```
 
-如果要求完全复用 Codex 的原生生图界面，则还需要确认客户端实际声明、图片生成事件、结果持久化和回放契约，再实现专门适配。不能依据提示词关键词或仅出现工具声明就把整个任务静默切到普通通道。本轮交付的是定位能力，尚未交付或实测上述生图执行器。
+3. 如果曾显式禁用 `[features].image_generation`，将其改为 `true`。完全退出 Codex（包括 Windows 托盘）并重新打开，再新建任务。由 Cockpit 等工具管理配置时，在其当前 provider 中合并相同请求头。
+4. 清空插件诊断，然后请求“生成一张蓝鲸图片，普通不透明背景”，或拖入图片请求修改。工具实际执行后应新增 `/images/generations` 或 `/images/edits` 记录。客户端负责保存与显示图片；插件只转发原 Images JSON 响应。原有随机数字图按钮验证的是识图，没有自动生成图片来消耗额度。
+
+该请求头的值是作者使用的客户端标记，不是 token，也不产生新授权；本插件构造 BPS headers 时不把它发送到上游。图片接口仍使用宿主提供的 OAuth Bearer、ChatGPT account ID 和账号代理，不需要新增 `OPENAI_API_KEY`。服务器插件不能替 Windows 客户端修改配置；只升级插件而不配置客户端，仍可能看不到生图工具。
+
+实现沿用作者的字段集合：`prompt`、`model=gpt-image-2`、`output_format=png`、`background=auto/opaque`、`quality=auto/low/medium/high`、`size=auto/1024x1024/1536x1024/1024x1536/1280x720`，可选整数 `n=1..3`。不自动换模型，不使用文字模型白名单校验图片模型。改图接受 `images[].image_url` 的 base64 data URL；转为一张图的 `image` 或多张图的 `image[]` multipart 文件，名称 `picture-N.png/jpg/gif/webp`，保留原字节。仅使用已支持的 JPEG/PNG/GIF/WebP MIME，不下载远程 URL 或跨通道 file_id。
+
+透明背景、非 PNG 输出及范围外参数明确报错。参考没有实现图片流式或 mask，本插件额外拒绝这两种显式请求，避免静默忽略；其他未列出的字段不向 BPS 发送。当前独立图片请求沿用 8 MiB 请求体、32 MiB 响应体和配置的超时限制（默认 600 秒），小于参考项目 64 MiB 的请求限制。插件自身不重试、不缓存生成结果、不把正文保存在诊断中；HTTP 错误保留状态、Retry-After 与脱敏原因。宿主既有的跨账号调度及图片端点 404/405 回退仍由宿主控制，本轮未改动；需要限定 BPS 路径时，请使用仅含选中 BPS 账号的分组。
+
+本工作区宿主已实现 `/v1/images/generations` 与 `/v1/images/edits` 的 OAuth 直调，`gpt-image-2` 会以独立图片端点经过插件。若服务器 fork 仍把图片请求转成带 hosted 工具的 `/responses`，则需要先升级该宿主能力，不能由插件猜测还原原图片请求。只出现读取 `SKILL.md`、没有生图工具调用，优先核对客户端头与开关；工具调用后无 Images 记录，检查宿主分组权限、模型调度及插件实例；有记录时再看明确的 BPS 拒绝原因。
 
 401/403 重点排查 token / account ID / 访问条件；400/422 排查模型、effort 与输入兼容；429 是限流或额度信号。真实部署遇到错误时保留状态码、Response ID、插件错误码即可，无需提供 token。
 

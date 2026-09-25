@@ -17,6 +17,8 @@ The new implementation deliberately does not execute OfficeJS, repair malformed 
 
 Version 0.1.10 follows CPA commit `708082da2f851569984de395d25405e61c2bbc34` for bounded native-envelope unwrapping and complete-history fallback when no native record is found. It adopts only whole single JSON fences from Excel's `_decode_transport_code`; it does not scan arbitrary text or repair invalid backslashes. Native KV scope checks remain intact; fallback uses only the supplied complete history and never loads another scope's record or executes a historical command.
 
+Version 0.1.12 freshly fetched both repositories. CPA HEAD remained `708082da2f851569984de395d25405e61c2bbc34`; Excel bridge HEAD was `66c41df941fb1a963801964c75ff24b4a19e93f2` (0.4.6, Unlicense). `image_generation.py`, `server.py`, `codex_config.py`, and their request fixtures informed the Go Images API adapter and the provider-header configuration example. Generation fields, multipart edit field names, fixed gpt-image-2/PNG selection, and supported sizes follow that commit. This adapter retains bounded bodies, strict JSON/MIME checks, redacted diagnostics, and no automatic retries or silent image omission. The actor header marker is never used as an upstream credential.
+
 ## Build dependencies
 
 Direct Go dependencies include HashiCorp go-plugin (MPL-2.0), go-hclog (MIT), gRPC-Go (Apache-2.0), protobuf-Go (BSD-3-Clause) and santhosh-tekuri/jsonschema/v6 (Apache-2.0). The module graph and exact versions are recorded in `go.mod` / `go.sum`; available upstream LICENSE, NOTICE and PATENTS files are copied into `licenses/` and included in the signed package.

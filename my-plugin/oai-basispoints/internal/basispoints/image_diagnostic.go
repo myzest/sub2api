@@ -98,5 +98,13 @@ func summarizeImages(source object) ([]imageDiagnostic, int) {
 			}
 		}
 	}
+	pictures, _ := source["images"].([]any)
+	for index, raw := range pictures {
+		if picture, ok := raw.(object); ok {
+			part := clone(picture)
+			part["type"] = "image"
+			add(part, fmt.Sprintf("images[%d]", index))
+		}
+	}
 	return result, count
 }

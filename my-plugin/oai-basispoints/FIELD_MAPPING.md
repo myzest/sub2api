@@ -1,9 +1,10 @@
-# 字段处理与源码依据（0.1.11）
+# 字段处理与源码依据（0.1.12）
 
 这里的“有依据”指参考仓库已实现该行为，不代表本插件已在用户桌面端或 BPS 实机验证。用户已要求自行验收，本次不运行测试或探测。
 
 ## 固定参考版本
 
+- 本轮重新拉取的 HEAD：CPA `708082da2f851569984de395d25405e61c2bbc34`（v0.1.9），Excel bridge `66c41df941fb1a963801964c75ff24b4a19e93f2`（0.4.6）。新增 Images 接口与客户端配置依据见下方“0.1.12”；旧文本/识图实现保留原固定参考，不一并引入新参考中的自动重试或丢图策略。
 - CPA：[`f4a2563`](https://github.com/JaxsonWang/cpa-plugin-oai-basispoints/tree/f4a2563647f807f5bc08e725fa933bcba28d2d11)，v0.1.8，MIT；用于本版附件上传、工具限制和回放、上下文配置修正。许可证随包附带。
 - Excel bridge：[`b2d6f25`](https://github.com/Kaixxrua/excel-codex-bridge/tree/b2d6f2529b6ffa9f1a630f17b7037ef6dcc0480a)，Unlicense；其 images.py 采用可抓取图片 URL，本插件选择 CPA 的同源附件方案，不引入临时公网图床或静默删图。
 - Codex additional_tools：依据 [OpenAI 官方工具搜索文档](https://developers.openai.com/api/docs/guides/tools-tool-search#add-tools-at-a-specific-point-in-the-input)、[本工作区宿主 Lite 转换](../../backend/internal/service/openai_responses_lite_tools.go)及 [EffectiveResponsesTools / custom exec 适配](../../backend/internal/pkg/apicompat/chatcompletions_responses_bridge.go)。两个参考的上述提交均仅收集顶层 tools，本版额外适配的是客户端/宿主入口，不宣称 BPS 原生支持该载体。
@@ -89,12 +90,31 @@
 - 附件文件名/MIME/长度摘要与 JPEG/PNG 探测选择属于本地观测及生成样本，不是新增上游协议。原有 PNG 探测通过不能覆盖 JPEG 路径。
 - 旧工具历史依据：[CPA `fallbackTransportCall` / `translateInputItems`](https://github.com/JaxsonWang/cpa-plugin-oai-basispoints/blob/708082da2f851569984de395d25405e61c2bbc34/internal/basispoints/protocol.go)、[Excel `_fallback_transport_call` / `translate_input_items`](https://github.com/Kaixxrua/excel-codex-bridge/blob/b2d6f2529b6ffa9f1a630f17b7037ef6dcc0480a/src/excel_codex_bridge/excel_upstream.py)。用户确认在切换通道/模型或继续旧任务后遇到非插件句柄错误，本版取消对完整外部历史的无条件拒绝；不把缺失参数补为空对象，也不为孤立结果编造调用。
 
-## 0.1.11 诊断历史与生图边界
+## 0.1.12 独立 Images API 与客户端工具
+
+依据：[image_generation.py](https://github.com/Kaixxrua/excel-codex-bridge/blob/66c41df941fb1a963801964c75ff24b4a19e93f2/src/excel_codex_bridge/image_generation.py)、[Bridge.images](https://github.com/Kaixxrua/excel-codex-bridge/blob/66c41df941fb1a963801964c75ff24b4a19e93f2/src/excel_codex_bridge/server.py#L262)、[IMAGE_TOOL_HEADER / codex_config](https://github.com/Kaixxrua/excel-codex-bridge/blob/66c41df941fb1a963801964c75ff24b4a19e93f2/src/excel_codex_bridge/codex_config.py#L22)及 [参考请求夹具](https://github.com/Kaixxrua/excel-codex-bridge/blob/66c41df941fb1a963801964c75ff24b4a19e93f2/tests/test_image_generation.py)。
+
+| 环节 | 已移植行为 |
+| --- | --- |
+| 客户端提供工具 | 在当前 provider 的 http_headers 合并 x-openai-actor-authorization=excel-codex-bridge；保持客户端 image_generation 开关开启。仅提供配置说明，不改用户全局配置或技能 |
+| 工具调用 | 已有 function/custom/namespace 中继承载客户端 image_gen.imagegen；执行器向 provider 图片端点发独立请求，不伪装成 hosted image_generation |
+| 文生图 | JSON POST 到 BPS /basispoints/api/images/generations |
+| 改图 | 客户端 JSON images[].image_url 解码为图片原字节，POST multipart 到 /basispoints/api/images/edits；单图 image，多图 image[]，文件名 picture-N 加明确扩展名 |
+| 公共字段 | prompt 原字符串；model 固定 gpt-image-2；output_format 固定 png；background/quality/size 缺省 auto；可选 n 为 1..3 的整数；支持列表与参考 _fields 相同 |
+| 身份与代理 | 复用宿主 OAuth、ChatGPT account ID、账号代理，Accept=application/json。provider 的 actor 标记不进入 BPS headers，也不代替 Authorization |
+| 响应 | 有界 JSON 对象返回给宿主，保留 data、b64_json、usage 和扩展字段；HTTP 错误保留状态及 Retry-After，插件自身不自动重试；宿主的调度及回退策略保持原样 |
+| 诊断 | image_operation、generated_images、upstream_started；生图即使没有输入图片也进入图片历史。只记录数量、字段摘要与状态；错误脱敏覆盖 prompt/images/mask |
+
+本地边界与参考不同处：沿用插件 8 MiB 请求、32 MiB 响应限制，要求有效无重复键 JSON，仅接受既有 JPEG/PNG/GIF/WebP MIME；参考虽未传递 stream/mask，本版明确拒绝其显式使用，避免执行与原请求不同的操作。其他未列出的字段不发送，不扩展透明背景、图片模型、尺寸、URL 下载等未经新参考实现的行为。宿主先于插件处理图片权限、模型映射与账号调度；插件无法恢复宿主已经丢失或改写的字段。
+
+宿主依据：[OAuth 直调](../../backend/internal/service/openai_images_direct.go)、[图片转发](../../backend/internal/service/openai_images_responses.go)、[统一插件出口](../../backend/internal/service/openai_plugin_transport.go)。gpt-image-2 的 generations/edits 在本工作区可进入相同 OAuth transport 插件，不需要另开监听端口或增加执行器。服务器 fork 需具备这条路由；旧宿主将图片转换为 hosted Responses 时不由本版自动猜测还原。
+
+## 0.1.11 诊断历史与生图边界（历史）
 
 - 参考 [CPA iterToolValues](https://github.com/JaxsonWang/cpa-plugin-oai-basispoints/blob/708082da2f851569984de395d25405e61c2bbc34/internal/basispoints/protocol.go#L37) 与 [Excel _iter_client_tools](https://github.com/Kaixxrua/excel-codex-bridge/blob/b2d6f2529b6ffa9f1a630f17b7037ef6dcc0480a/src/excel_codex_bridge/excel_upstream.py#L237)，本插件仍仅桥接 function/custom/namespace 叶子。原生 image_generation、tool_search 等类型会被统计但不进入目录，本版 UI 将该边界明确显示；不会根据工具名字猜测其生图能力。
 - `clear_diagnostics` 是插件本地管理命令，复用 Host UI Bridge v1 config.save/config.test；ApplyConfig 本身不会执行命令。清空不发送 BPS 请求，不改变请求字段、工具回放和图片上传协议。
 - 状态新增 `diagnostic_generation` 与 `diagnostics_cleared_at`，只用于清空后的请求归档和 UI 选择同步。清空时更新代次及两个内存历史，旧代次在途请求完成后跳过归档。
-- [宿主生图入口](../../backend/internal/service/openai_images.go)、[OAuth 直调构造](../../backend/internal/service/openai_images_direct.go)和 [OAuth 转发](../../backend/internal/service/openai_images_responses.go)提供后续普通通道接入的源码依据，不能等同于已经接通 BPS 原生生图。当前插件端点限制见 `internal/basispoints/transport.go`。
+- 当时仅依据旧参考评估普通生图通道；新参考提供独立 BPS Images 路径，0.1.12 已替换此前接入方案，见上节。
 
 ## 0.1.10 运维反馈修正
 

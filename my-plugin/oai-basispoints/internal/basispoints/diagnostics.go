@@ -16,6 +16,8 @@ type requestDiagnostic struct {
 	Origin               string            `json:"origin"`
 	AccountID            int64             `json:"account_id"`
 	Model                string            `json:"model,omitempty"`
+	ImageOperation       string            `json:"image_operation,omitempty"`
+	GeneratedImages      int               `json:"generated_images,omitempty"`
 	StartedAt            int64             `json:"started_at"`
 	FinishedAt           int64             `json:"finished_at"`
 	Stage                string            `json:"stage"`
@@ -49,6 +51,7 @@ type requestDiagnostic struct {
 	Error                string            `json:"error,omitempty"`
 	ErrorSource          string            `json:"error_source,omitempty"`
 	ResponsesStarted     bool              `json:"responses_started"`
+	UpstreamStarted      bool              `json:"upstream_started"`
 	ClientHTTPStatus     int               `json:"client_http_status,omitempty"`
 	Relay                []relayDiagnostic `json:"relay,omitempty"`
 	Replay               *replayDiagnostic `json:"replay,omitempty"`
@@ -206,7 +209,7 @@ func (s *Server) finishDiagnostic(d *requestDiagnostic) {
 	}
 	s.lastRequest = d
 	s.recentRequests = prependDiagnostic(s.recentRequests, d, 20)
-	if d.InputImages > 0 {
+	if d.InputImages > 0 || d.ImageOperation != "" {
 		s.imageRequests = prependDiagnostic(s.imageRequests, d, 10)
 	}
 }

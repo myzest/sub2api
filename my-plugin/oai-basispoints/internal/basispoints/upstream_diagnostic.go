@@ -62,7 +62,7 @@ func readUpstreamDiagnostic(body io.Reader, headers http.Header, rawRequest []by
 		}
 	}
 	collectRequest := func(source object) {
-		for _, key := range []string{"input", "instructions", "metadata", "client_metadata", "prompt_cache_key", "promptCacheKey", "session_id", "sessionId"} {
+		for _, key := range []string{"input", "instructions", "metadata", "client_metadata", "prompt_cache_key", "promptCacheKey", "session_id", "sessionId", "prompt", "images", "mask"} {
 			collect(source[key], key)
 		}
 	}

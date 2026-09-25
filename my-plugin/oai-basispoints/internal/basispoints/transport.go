@@ -61,6 +61,7 @@ func (w *forwardWriter) json(status int, value any, headers http.Header) error {
 				failure["diagnostic_id"] = w.diagnostic.ID
 				failure["source"] = w.diagnostic.ErrorSource
 				failure["responses_started"] = w.diagnostic.ResponsesStarted
+				failure["upstream_started"] = w.diagnostic.UpstreamStarted
 				failure["message"] = str(failure, "message") + "；诊断 ID：" + w.diagnostic.ID
 			}
 		}
@@ -127,8 +128,17 @@ func (s *Server) Forward(stream pluginv1.TransportPlugin_ForwardServer) (result 
 		}
 	}()
 	u, err := url.Parse(start.Url)
-	if err != nil || start.Method != http.MethodPost || u == nil || !strings.HasSuffix(u.Path, "/responses") || strings.HasSuffix(u.Path, "//responses") {
-		return w.reject(400, "bps_unsupported_endpoint", "所选 BPS 账号仅支持 POST /responses；不支持 /responses/compact 或 /input_tokens")
+	if u != nil {
+		d.ImageOperation = imageOperation(u.Path)
+		if d.ImageOperation != "" {
+			d.ImageTransport = "json"
+			if d.ImageOperation == "edits" {
+				d.ImageTransport = "multipart"
+			}
+		}
+	}
+	if err != nil || start.Method != http.MethodPost || u == nil || (d.ImageOperation == "" && (!strings.HasSuffix(u.Path, "/responses") || strings.Contains(u.Path, "//"))) {
+		return w.reject(400, "bps_unsupported_endpoint", "所选 BPS 账号支持 POST /responses、/images/generations、/images/edits；不支持 /responses/compact 或 /input_tokens")
 	}
 	var buffer bytes.Buffer
 	if err := receiveBody(stream, &buffer, start.HasBody, maxBody); err != nil {
@@ -139,6 +149,9 @@ func (s *Server) Forward(stream pluginv1.TransportPlugin_ForwardServer) (result 
 	}
 	ctx, cancel := context.WithTimeout(stream.Context(), time.Duration(cfg.TimeoutSeconds)*time.Second)
 	defer cancel()
+	if d.ImageOperation != "" {
+		return s.forwardImages(ctx, w, start, buffer.Bytes())
+	}
 	d.Replay = &replayDiagnostic{}
 	ctx = context.WithValue(ctx, replayDiagnosticContextKey{}, d.Replay)
 	d.input(buffer.Bytes())
@@ -195,6 +208,7 @@ func (s *Server) Forward(stream pluginv1.TransportPlugin_ForwardServer) (result 
 	d.Stage = "connect"
 	// Once RoundTrip is entered, conservatively prohibit host account replay.
 	d.ResponsesStarted = true
+	d.UpstreamStarted = true
 	resp, err := transport.RoundTrip(req)
 	if err != nil {
 		d.ErrorSource = "upstream_transport"

@@ -93,7 +93,7 @@
     const seen=new Set();
     return source.filter(r=>{
       if(!r||typeof r!=='object'||typeof r.id!=='string'||!r.id||seen.has(r.id))return false;
-      if(imageOnly&&!hasHistory&&!r.input_images&&!r.images?.length&&r.origin!=='image_route_probe')return false;
+      if(imageOnly&&!hasHistory&&!r.input_images&&!r.images?.length&&!r.image_operation&&r.origin!=='image_route_probe')return false;
       seen.add(r.id);return true;
     }).slice(0,imageOnly?10:20);
   }
@@ -101,7 +101,8 @@
     const time=Number(r.finished_at||r.started_at);
     const date=Number.isFinite(time)&&time>0?new Date(time*1000).toLocaleString('zh-CN',{hour12:false}):'时间未知';
     const origin=r.origin==='image_route_probe'?'路由探测':'客户端';
-    return `${date} · ${origin} · #${r.account_id} · ${r.model||'模型未解析'} · 输入图片 ${r.input_images||0} · HTTP ${r.http_status||'—'}${r.error?` · 失败${r.error_source?`（${errorSourceText(r.error_source)}）`:''}`:''}${r.id?` · ID ${r.id.slice(0,8)}`:''}`;
+    const kind=r.image_operation==='generations'?'生图':r.image_operation==='edits'?'改图':'Responses';
+    return `${date} · ${origin} · ${kind} · #${r.account_id} · ${r.model||'模型未解析'} · 输入图片 ${r.input_images||0} · HTTP ${r.http_status||'—'}${r.error?` · 失败${r.error_source?`（${errorSourceText(r.error_source)}）`:''}`:''}${r.id?` · ID ${r.id.slice(0,8)}`:''}`;
   }
   function diagnosticRuntime(snapshot) {
     const cleared=snapshot?.diagnostics_cleared_at;
@@ -149,7 +150,9 @@
   }
   function requestText(r) {
     if(!r)return '尚无已结束的 BPS 路由请求。在 Codex 中发送请求后，点击“刷新诊断”。';
+    const imageAPI=Boolean(r.image_operation), api=imageAPI?'Images':'Responses';
     const lines=[`账号 #${r.account_id} · ${r.model||'模型未解析'}`];
+    lines.push(`接口：${imageAPI?`/images/${r.image_operation}`:'/responses'}`);
     if(r.version||r.instance)lines.push(`记录插件：${r.version?`v${r.version}`:'版本未提供'} · 实例：${r.instance||'未提供'}`);
     if(r.origin)lines.push(`请求来源：${{route:'客户端路由',image_route_probe:'图片路由探测'}[r.origin]||r.origin}`);
     if(r.id)lines.push(`诊断 ID：${r.id}`);
@@ -160,13 +163,13 @@
     if(r.reasoning_effort)lines.push(`推理强度：${r.reasoning_effort}`);
     if(r.image_transport)lines.push(`图片传输：${r.image_transport}`);
     if(Number.isFinite(r.request_bytes))lines.push(`客户端请求体：${r.request_bytes} bytes`);
-    if(Number.isFinite(r.upstream_request_bytes))lines.push(`Responses 请求体：${r.upstream_request_bytes} bytes`);
-    lines.push(`Responses HTTP：${r.http_status||'未收到响应'}`);
-    if(r.responses_started===false)lines.push('Responses 发送阶段：尚未开始');
+    if(Number.isFinite(r.upstream_request_bytes))lines.push(`${api} 请求体：${r.upstream_request_bytes} bytes`);
+    lines.push(`${api} HTTP：${r.http_status||'未收到响应'}`);
+    if((imageAPI?r.upstream_started:r.responses_started)===false)lines.push(`${api} 发送阶段：尚未开始`);
     if(r.client_http_status)lines.push(`客户端 HTTP：${r.client_http_status}${r.error&&r.client_http_status<400?'（请求仍在流内失败，HTTP 200 不代表完成）':''}`);
     if(r.error_source)lines.push(`错误来源：${errorSourceText(r.error_source)}`);
-    if(r.content_type)lines.push(`Responses Content-Type：${r.content_type}`);
-    if(r.request_id)lines.push(`Responses Request ID：${r.request_id}`);
+    if(r.content_type)lines.push(`${api} Content-Type：${r.content_type}`);
+    if(r.request_id)lines.push(`${api} Request ID：${r.request_id}`);
     if(r.attachment)lines.push(...attachmentText(r.attachment));
     else if(r.attachment_http_status)lines.push(`附件 HTTP：${r.attachment_http_status}`);
     if(r.upstream_error_state){
@@ -177,11 +180,18 @@
     lines.push(`输入图片总数：${r.input_images||0}`);
     lines.push(...imageSummaryText(r.images,'客户端图片字段'));
     lines.push(...imageSummaryText(r.upstream_images,'上游图片字段'));
+    if(imageAPI){
+      lines.push(`输出图片条目：${r.generated_images||0}（按 b64_json/url 计数；不记录图片正文）`);
+      if(r.stage==='completed'&&!r.generated_images)lines.push('Images 返回 JSON 但没有图片条目，不能判定生图成功。');
+      if(r.error)lines.push(`错误：${r.error}`);
+      lines.push('这是 Codex 生图执行器使用的独立图片接口；文件保存与对话展示由客户端完成。');
+      return lines.join('\n');
+    }
     const types=Object.entries(r.tool_types||{}).map(([name,count])=>`${name} × ${count}`);
     lines.push(`客户端工具类型：${types.length?types.join('，'):'无'}`);
     const unbridged=Object.entries(r.tool_types||{}).filter(([name,count])=>count>0&&!['function','custom','namespace'].includes(name));
     if(unbridged.length)lines.push(`未桥接的工具类型：${unbridged.map(([name,count])=>`${name} × ${count}`).join('，')}（不会作为可调用工具发送给 BPS）`);
-    if(r.tool_types?.image_generation)lines.push('原生生图声明：已收到 image_generation，但本插件尚未适配其执行与图片结果返回。');
+    if(r.tool_types?.image_generation)lines.push('原生生图声明：已收到 hosted image_generation，此类型尚未映射；本插件通过客户端 image_gen 工具及独立 Images 接口生图。');
     else lines.push('原生生图声明：本次摘要未记录到 image_generation；不能据此排除 function/custom 或客户端动态提供的生图工具。');
     const sources=Object.entries(r.tool_sources||{}).map(([name,count])=>`${name} × ${count}`);
     if(sources.length)lines.push(`工具声明来源（未展开 namespace）：${sources.join('，')}`);

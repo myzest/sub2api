@@ -1,0 +1,15 @@
+# 依据 excel-codex-bridge 66c41df / 0.4.6 的 Codex provider 设置。
+# 先升级服务器上的插件至 0.1.12，再合并到客户端配置。
+# Windows: %USERPROFILE%\.codex\config.toml
+# macOS:   ~/.codex/config.toml
+#
+# custom 必须改成你已有的 model_provider 值。
+# 在已有 provider 表中添加/合并 http_headers，不要重复添加整个表或覆盖其他头。
+# 保留原 base_url、鉴权和文字模型配置；无需设置 OPENAI_API_KEY。
+[model_providers.custom]
+http_headers = { "x-openai-actor-authorization" = "excel-codex-bridge" }
+
+# 如你曾显式禁用 features.image_generation，请在已有 [features] 表中改为 true。
+# 完全退出 Codex（包括托盘）并重开后，新任务才会使用新的工具配置。
+# 若配置由 Cockpit 等工具管理，请修改它所管理的当前 provider。
+# 服务端分组需允许生图，gpt-image-2 应能调度至已选 BPS 账号；不要映射为文字模型。
