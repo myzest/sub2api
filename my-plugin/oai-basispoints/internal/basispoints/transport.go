@@ -298,7 +298,7 @@ func (s *Server) Forward(stream pluginv1.TransportPlugin_ForwardServer) (result 
 			return w.fail("bps_response", err.Error(), true)
 		}
 		d.Terminal = relay.terminal
-		d.OutputToolCalls = len(responseToolCalls(relay.response))
+		d.output(relay.response)
 		if relay.terminal == "response.completed" {
 			d.Stage = "completed"
 		} else {

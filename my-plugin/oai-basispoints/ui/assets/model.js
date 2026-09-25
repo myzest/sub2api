@@ -148,6 +148,22 @@
     }
     return lines;
   }
+  function clientToolHistoryText(r) {
+    if(!Array.isArray(r.client_tool_history))return [];
+    const rows=r.client_tool_history.slice(-16), count=r.client_tool_history_count||0;
+    const lines=[`客户端工具回传链：最后一条 user 消息之后共 ${count} 项，显示最近 ${rows.length} 项（来自本次请求携带的历史）`];
+    for(const row of rows){
+      const result=['function_call_output','custom_tool_call_output'].includes(row.type);
+      lines.push(`  input[${row.input_index}] · ${result?'结果':'调用'} · ${row.type} · ${row.name||'名称未关联到唯一调用'}`);
+      if(result){
+        lines.push(`    output 格式：${row.output_format||'未记录'}`);
+        const signals=Array.isArray(row.signals)?row.signals.slice(0,8):[];
+        lines.push(`    客户端自报字段：${signals.length?signals.join(' · '):'未提取到受支持的机器状态；不能据此判断成功、失败或策略拦截'}`);
+      }
+    }
+    lines.push('queued/accepted 仅表示请求已提交；completed 或 exit_code=0 也不能证明已渲染预览。这里只摘录白名单字段，不保存结果正文，不推断嵌套执行器内部调用。');
+    return lines;
+  }
   function requestText(r) {
     if(!r)return '尚无已结束的 BPS 路由请求。在 Codex 中发送请求后，点击“刷新诊断”。';
     const imageAPI=Boolean(r.image_operation), api=imageAPI?'Images':'Responses';
@@ -214,12 +230,18 @@
     const handles=Object.entries(r.history_handles||{}).map(([name,count])=>`${handleLabels[name]||name} × ${count}`);
     if(handles.length)lines.push(`历史 ID 分类（调用及结果合计）：${handles.join('，')}`);
     lines.push(...replayText(r.replay));
+    lines.push(...clientToolHistoryText(r));
     lines.push(`可调用工具：${r.callable_tools||0}`);
     if(r.tool_names?.length)lines.push(`工具名称（最多 32 个）：${r.tool_names.slice(0,32).join('，')}`);
     if(r.callable_tools>(r.tool_names?.length||0))lines.push('工具名称列表已截断；未显示的名称不能据此判定为不存在。');
     lines.push(`tool_choice：${r.tool_choice===undefined||r.tool_choice===''?'未显式指定':valueText(r.tool_choice)}`);
     lines.push(`parallel_tool_calls：${r.parallel_tool_calls===undefined?'未显式指定':valueText(r.parallel_tool_calls)}`);
     lines.push(`输出工具调用：${r.output_tool_calls||0}`);
+    if(r.output_tools?.length){
+      lines.push('输出工具明细（转换后，最多 16 项；不等于客户端已执行）：');
+      for(const tool of r.output_tools.slice(0,16))lines.push(`  ${tool.type} · ${tool.name||'名称未记录'}`);
+      if(r.output_tool_calls>r.output_tools.length)lines.push('输出工具明细已截断。');
+    }
     const nativeTypes=Object.entries(r.native_tool_types||{}).map(([name,count])=>`${name} × ${count}`);
     if(nativeTypes.length)lines.push(`BPS 原生工具类型（转换前）：${nativeTypes.join('，')}`);
     if(r.native_tool_names?.length)lines.push(`BPS 原生工具（转换前，最多 32 个）：${r.native_tool_names.slice(0,32).join('，')}`);

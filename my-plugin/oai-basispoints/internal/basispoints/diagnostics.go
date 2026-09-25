@@ -9,60 +9,63 @@ import (
 // Bounded completed-request summaries are retained only in memory. Raw request
 // bodies, image URLs/pixels, schemas and tool arguments are never stored here.
 type requestDiagnostic struct {
-	generation           uint64                    // Captured at ingress; a clear also excludes older in-flight requests.
-	ID                   string                    `json:"id"`
-	Version              string                    `json:"version"`
-	Instance             string                    `json:"instance"`
-	Origin               string                    `json:"origin"`
-	AccountID            int64                     `json:"account_id"`
-	Model                string                    `json:"model,omitempty"`
-	ImageOperation       string                    `json:"image_operation,omitempty"`
-	GeneratedImages      int                       `json:"generated_images,omitempty"`
-	StartedAt            int64                     `json:"started_at"`
-	FinishedAt           int64                     `json:"finished_at"`
-	Stage                string                    `json:"stage"`
-	HTTPStatus           int                       `json:"http_status,omitempty"`
-	AttachmentHTTPStatus int                       `json:"attachment_http_status,omitempty"`
-	Attachment           *attachmentReport         `json:"attachment,omitempty"`
-	ImageTransport       string                    `json:"image_transport"`
-	ReasoningEffort      string                    `json:"reasoning_effort,omitempty"`
-	RequestBytes         int                       `json:"request_bytes,omitempty"`
-	UpstreamRequestBytes int                       `json:"upstream_request_bytes,omitempty"`
-	RequestID            string                    `json:"request_id,omitempty"`
-	ContentType          string                    `json:"content_type,omitempty"`
-	UpstreamError        string                    `json:"upstream_error,omitempty"`
-	UpstreamErrorState   string                    `json:"upstream_error_state,omitempty"`
-	Images               []imageDiagnostic         `json:"images,omitempty"`
-	UpstreamImages       []imageDiagnostic         `json:"upstream_images,omitempty"`
-	ToolTypes            map[string]int            `json:"tool_types"`
-	ToolSources          map[string]int            `json:"tool_sources"`
-	AdditionalToolItems  int                       `json:"additional_tool_items"`
-	CallableTools        int                       `json:"callable_tools"`
-	ToolNames            []string                  `json:"tool_names"`
-	HistoryTypes         map[string]int            `json:"history_types,omitempty"`
-	HistoryHandles       map[string]int            `json:"history_handles,omitempty"`
-	ToolChoice           string                    `json:"tool_choice"`
-	ParallelToolCalls    bool                      `json:"parallel_tool_calls"`
-	InputImages          int                       `json:"input_images"`
-	OutputToolCalls      int                       `json:"output_tool_calls"`
-	NativeToolTypes      map[string]int            `json:"native_tool_types,omitempty"`
-	NativeToolNames      []string                  `json:"native_tool_names,omitempty"`
-	Terminal             string                    `json:"terminal,omitempty"`
-	Error                string                    `json:"error,omitempty"`
-	ErrorSource          string                    `json:"error_source,omitempty"`
-	ResponsesStarted     bool                      `json:"responses_started"`
-	UpstreamStarted      bool                      `json:"upstream_started"`
-	ResponseAttempts     int                       `json:"response_attempts,omitempty"`
-	ProtocolRetries      int                       `json:"protocol_retries,omitempty"`
-	ImageFallbacks       []string                  `json:"image_fallbacks,omitempty"`
-	ResponseRetries      []responseRetryDiagnostic `json:"response_retries,omitempty"`
-	OmittedImages        int                       `json:"omitted_images,omitempty"`
-	Keepalives           int                       `json:"keepalives,omitempty"`
-	CompletionRecovered  bool                      `json:"completion_recovered,omitempty"`
-	SkippedTools         int                       `json:"skipped_tools,omitempty"`
-	ClientHTTPStatus     int                       `json:"client_http_status,omitempty"`
-	Relay                []relayDiagnostic         `json:"relay,omitempty"`
-	Replay               *replayDiagnostic         `json:"replay,omitempty"`
+	generation             uint64                    // Captured at ingress; a clear also excludes older in-flight requests.
+	ID                     string                    `json:"id"`
+	Version                string                    `json:"version"`
+	Instance               string                    `json:"instance"`
+	Origin                 string                    `json:"origin"`
+	AccountID              int64                     `json:"account_id"`
+	Model                  string                    `json:"model,omitempty"`
+	ImageOperation         string                    `json:"image_operation,omitempty"`
+	GeneratedImages        int                       `json:"generated_images,omitempty"`
+	StartedAt              int64                     `json:"started_at"`
+	FinishedAt             int64                     `json:"finished_at"`
+	Stage                  string                    `json:"stage"`
+	HTTPStatus             int                       `json:"http_status,omitempty"`
+	AttachmentHTTPStatus   int                       `json:"attachment_http_status,omitempty"`
+	Attachment             *attachmentReport         `json:"attachment,omitempty"`
+	ImageTransport         string                    `json:"image_transport"`
+	ReasoningEffort        string                    `json:"reasoning_effort,omitempty"`
+	RequestBytes           int                       `json:"request_bytes,omitempty"`
+	UpstreamRequestBytes   int                       `json:"upstream_request_bytes,omitempty"`
+	RequestID              string                    `json:"request_id,omitempty"`
+	ContentType            string                    `json:"content_type,omitempty"`
+	UpstreamError          string                    `json:"upstream_error,omitempty"`
+	UpstreamErrorState     string                    `json:"upstream_error_state,omitempty"`
+	Images                 []imageDiagnostic         `json:"images,omitempty"`
+	UpstreamImages         []imageDiagnostic         `json:"upstream_images,omitempty"`
+	ToolTypes              map[string]int            `json:"tool_types"`
+	ToolSources            map[string]int            `json:"tool_sources"`
+	AdditionalToolItems    int                       `json:"additional_tool_items"`
+	CallableTools          int                       `json:"callable_tools"`
+	ToolNames              []string                  `json:"tool_names"`
+	HistoryTypes           map[string]int            `json:"history_types,omitempty"`
+	HistoryHandles         map[string]int            `json:"history_handles,omitempty"`
+	ToolChoice             string                    `json:"tool_choice"`
+	ParallelToolCalls      bool                      `json:"parallel_tool_calls"`
+	InputImages            int                       `json:"input_images"`
+	OutputToolCalls        int                       `json:"output_tool_calls"`
+	OutputTools            []outputToolDiagnostic    `json:"output_tools,omitempty"`
+	ClientToolHistory      []clientToolDiagnostic    `json:"client_tool_history"`
+	ClientToolHistoryCount int                       `json:"client_tool_history_count"`
+	NativeToolTypes        map[string]int            `json:"native_tool_types,omitempty"`
+	NativeToolNames        []string                  `json:"native_tool_names,omitempty"`
+	Terminal               string                    `json:"terminal,omitempty"`
+	Error                  string                    `json:"error,omitempty"`
+	ErrorSource            string                    `json:"error_source,omitempty"`
+	ResponsesStarted       bool                      `json:"responses_started"`
+	UpstreamStarted        bool                      `json:"upstream_started"`
+	ResponseAttempts       int                       `json:"response_attempts,omitempty"`
+	ProtocolRetries        int                       `json:"protocol_retries,omitempty"`
+	ImageFallbacks         []string                  `json:"image_fallbacks,omitempty"`
+	ResponseRetries        []responseRetryDiagnostic `json:"response_retries,omitempty"`
+	OmittedImages          int                       `json:"omitted_images,omitempty"`
+	Keepalives             int                       `json:"keepalives,omitempty"`
+	CompletionRecovered    bool                      `json:"completion_recovered,omitempty"`
+	SkippedTools           int                       `json:"skipped_tools,omitempty"`
+	ClientHTTPStatus       int                       `json:"client_http_status,omitempty"`
+	Relay                  []relayDiagnostic         `json:"relay,omitempty"`
+	Replay                 *replayDiagnostic         `json:"replay,omitempty"`
 }
 
 type responseRetryDiagnostic struct {
@@ -161,6 +164,7 @@ func (d *requestDiagnostic) input(raw []byte) {
 	d.Images, d.InputImages = summarizeImages(source)
 	d.HistoryTypes, d.HistoryHandles = map[string]int{}, map[string]int{}
 	input, _ := source["input"].([]any)
+	d.clientToolHistory(input)
 	for _, raw := range input {
 		item, ok := raw.(object)
 		if !ok {

@@ -1,10 +1,12 @@
-# Excel bridge 容错对照（0.1.13）
+# Excel bridge 容错对照（0.1.14）
 
 参考固定为 [Excel bridge 0.4.6 / 66c41df](https://github.com/Kaixxrua/excel-codex-bridge/tree/66c41df941fb1a963801964c75ff24b4a19e93f2)，并与此前 `b2d6f25` 对照。另保留 CPA `708082d` 的附件、回放和工具约束依据。此表覆盖与本插件请求链路有关的容错；Python 启动器、Excel 登录和 Windows 凭据存储不移植到服务端 transport 插件。
 
 “已实现”表示代码及编译检查已完成，**不表示运行测试或真实 BPS 验收通过**。用户要求自行测试，本轮没有发送账号请求。用户诊断 `84d0e06a66fcf09c77369feb61519acb` 显示外层 arguments 可解码，内层 code 为 invalid_escape；未取得原始 code，不能确认具体字符。反斜杠兼容在 `b2d6f25` 已存在，属于补齐旧插件遗漏，并非作者在 0.4.6 首次增加。
 
 ## 工具信封与回放
+
+0.1.14 额外增加客户端工具调用/结果摘要，以及执行器嵌套工具和预览回执的指引。这是针对用户新反馈的本地诊断增强，不是 Excel bridge 新增了预览协议；不增加上游字段、不改工具参数或客户端权限。具体边界见 README 的“预览失败如何定位”。以下 0.1.13 移植行为保留。
 
 源码：[excel_upstream.py](https://github.com/Kaixxrua/excel-codex-bridge/blob/66c41df941fb1a963801964c75ff24b4a19e93f2/src/excel_codex_bridge/excel_upstream.py)。
 

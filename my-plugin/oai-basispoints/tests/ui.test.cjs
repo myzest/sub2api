@@ -37,6 +37,16 @@ test('compatibility diagnostics retain earlier refusal and distinguish omitted p
   assert.match(image,/HTTP 200 不代表出图/);assert.doesNotMatch(image,/流内失败/);
 });
 
+test('client tool trace distinguishes queued acknowledgements from verified previews',()=>{
+  const text=model.requestText({account_id:7,callable_tools:1,output_tool_calls:1,output_tools:[{type:'custom_tool_call',name:'functions.exec'}],client_tool_history_count:2,client_tool_history:[{input_index:2,type:'function_call',name:'mcp__codex_app.open_in_codex'},{input_index:3,type:'function_call_output',name:'mcp__codex_app.open_in_codex',output_format:'object',signals:['output.structuredContent.status=queued']}]});
+  assert.match(text,/转换后.*不等于客户端已执行/);assert.match(text,/custom_tool_call · functions.exec/);
+  assert.match(text,/input\[3\].*结果/);assert.match(text,/status=queued/);
+  assert.match(text,/不能证明已渲染预览/);assert.match(text,/不推断嵌套执行器内部调用/);
+  const unknown=model.requestText({account_id:7,client_tool_history_count:1,client_tool_history:[{input_index:1,type:'custom_tool_call_output',output_format:'string'}]});
+  assert.match(unknown,/不能据此判断成功、失败或策略拦截/);
+  assert.doesNotMatch(model.requestText({account_id:7}),/客户端工具回传链/);
+});
+
 test('bridge rejects forged messages and resolves only the matching parent/token/request',async()=>{
   const handlers={},sent=[],timers=new Map();let timerID=0;
   const parent={postMessage:(message)=>sent.push(message)};
