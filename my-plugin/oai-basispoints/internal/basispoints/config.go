@@ -11,7 +11,7 @@ import (
 
 const (
 	PluginID    = "local.sub2api.oai-basispoints"
-	Version     = "0.1.3"
+	Version     = "0.1.5"
 	Capability  = "openai.oauth.outbound_transport.v1"
 	bpsURL      = "https://bps.openai.com/basispoints/api/responses"
 	maxBody     = 8 << 20
@@ -26,24 +26,26 @@ type Config struct {
 	AllowUltra       bool     `json:"allow_ultra"`
 	TimeoutSeconds   int      `json:"timeout_seconds"`
 	ReplayTTLSeconds int      `json:"replay_ttl_seconds"`
+	ImageTransport   string   `json:"image_transport"`
 	Command          *Command `json:"command,omitempty"`
 }
 
 type Command struct {
-	ID        string `json:"id"`
-	Instance  string `json:"instance"`
-	IssuedAt  int64  `json:"issued_at"`
-	Action    string `json:"action"`
-	AccountID int64  `json:"account_id,omitempty"`
-	Model     string `json:"model,omitempty"`
-	Effort    string `json:"effort,omitempty"`
+	ID          string `json:"id"`
+	Instance    string `json:"instance"`
+	IssuedAt    int64  `json:"issued_at"`
+	Action      string `json:"action"`
+	AccountID   int64  `json:"account_id,omitempty"`
+	Model       string `json:"model,omitempty"`
+	Effort      string `json:"effort,omitempty"`
+	ImageDetail string `json:"image_detail,omitempty"`
 }
 
 var modelPattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]{0,119}$`)
 var idPattern = regexp.MustCompile(`^[a-zA-Z0-9-]{16,64}$`)
 
 func defaultConfig() Config {
-	return Config{AccountIDs: []int64{}, Models: []string{"gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-6-astra"}, DefaultEffort: "medium", TimeoutSeconds: 600, ReplayTTLSeconds: 86400}
+	return Config{AccountIDs: []int64{}, Models: []string{"gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-6-astra"}, DefaultEffort: "medium", TimeoutSeconds: 600, ReplayTTLSeconds: 86400, ImageTransport: "attachment"}
 }
 
 func parseConfig(raw []byte) (Config, error) {
@@ -97,19 +99,32 @@ func parseConfig(raw []byte) (Config, error) {
 	if c.ReplayTTLSeconds < 300 || c.ReplayTTLSeconds > 604800 {
 		return c, errors.New("工具回放保留时间必须为 300–604800 秒")
 	}
+	if c.ImageTransport != "attachment" && c.ImageTransport != "passthrough" {
+		return c, errors.New("image_transport 只允许 attachment 或 passthrough")
+	}
 	if cmd := c.Command; cmd != nil {
 		if !idPattern.MatchString(cmd.ID) || !idPattern.MatchString(cmd.Instance) || cmd.IssuedAt <= 0 {
 			return c, errors.New("操作标识无效，请重新打开插件页面")
 		}
-		if cmd.Action != "accounts" && cmd.Action != "probe" {
+		if cmd.Action != "accounts" && cmd.Action != "probe" && cmd.Action != "probe_image" && cmd.Action != "probe_tools" {
 			return c, errors.New("不支持的操作")
 		}
-		if cmd.Action == "probe" {
+		if cmd.Action != "accounts" {
 			if cmd.AccountID <= 0 || !slices.Contains(c.Models, cmd.Model) {
 				return c, errors.New("探测需要选择账号和允许的模型")
 			}
 			if _, err := effort(cmd.Effort, c.AllowUltra); err != nil {
 				return c, err
+			}
+		}
+		if cmd.Action == "probe_image" {
+			if cmd.ImageDetail == "" {
+				cmd.ImageDetail = "high"
+			}
+			switch cmd.ImageDetail {
+			case "auto", "low", "high", "original":
+			default:
+				return c, errors.New("图片探测 detail 只允许 auto/low/high/original")
 			}
 		}
 	}

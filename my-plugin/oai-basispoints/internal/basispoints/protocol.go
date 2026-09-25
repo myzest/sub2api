@@ -112,10 +112,15 @@ func (s *Server) prepare(ctx context.Context, raw []byte, accountID int64, heade
 	if key := cacheKey(source); key != "" {
 		body["prompt_cache_key"] = key
 	}
-	if cm, ok := source["context_management"].([]any); ok {
-		body["context_management"] = cm
-	} else {
-		body["context_management"] = []any{object{"type": "compaction", "compact_threshold": 200000}}
+	// CPA v0.1.8 omits an absent/null/empty compaction policy. It forwards
+	// other explicit values for upstream validation, without inventing a default.
+	if policy := source["context_management"]; policy != nil {
+		if entries, array := policy.([]any); !array || len(entries) > 0 {
+			body["context_management"] = policy
+		}
+	}
+	if tier, exists := source["service_tier"]; exists {
+		body["service_tier"] = tier
 	}
 	body["metadata"] = requestMetadata(source, items)
 	if len(encoded(body)) > maxBody {

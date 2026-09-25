@@ -18,6 +18,7 @@ type toolCatalog struct {
 	entries  []any
 	required bool
 	forced   string
+	parallel bool
 }
 type noExternalSchemas struct{}
 
@@ -26,7 +27,7 @@ func (noExternalSchemas) Load(string) (any, error) {
 }
 
 func readTools(source object) (*toolCatalog, error) {
-	c := &toolCatalog{tools: map[string]toolSpec{}, entries: []any{}}
+	c := &toolCatalog{tools: map[string]toolSpec{}, entries: []any{}, parallel: source["parallel_tool_calls"] != false}
 	if str(source, "tool_choice") == "none" {
 		return c, nil
 	}
@@ -47,18 +48,40 @@ func readTools(source object) (*toolCatalog, error) {
 		}
 		c.required = v == "required"
 	case object:
+		if str(v, "type") == "allowed_tools" {
+			mode := str(v, "mode")
+			if mode != "" && mode != "auto" && mode != "required" {
+				return nil, errors.New("allowed_tools.mode 只支持 auto/required")
+			}
+			list, ok := v["tools"].([]any)
+			if !ok {
+				return nil, errors.New("allowed_tools.tools 必须为数组")
+			}
+			selected := map[string]bool{}
+			for _, raw := range list {
+				tool, ok := raw.(object)
+				if !ok {
+					return nil, errors.New("allowed_tools 的工具声明必须为对象")
+				}
+				name, err := c.selectedTool(tool)
+				if err != nil {
+					return nil, err
+				}
+				selected[name] = true
+			}
+			c.restrict(selected)
+			c.required = mode == "required"
+			break
+		}
 		if t := str(v, "type"); t != "function" && t != "custom" {
-			return nil, errors.New("tool_choice 只支持 auto/none/required 或单个 function/custom")
+			return nil, errors.New("tool_choice 只支持 auto/none/required、function/custom 或 allowed_tools")
 		}
-		name := str(v, "name")
-		if ns := str(v, "namespace"); ns != "" {
-			name = ns + "." + name
-		}
-		spec, ok := c.tools[name]
-		if !ok || spec.kind != str(v, "type") {
-			return nil, errors.New("tool_choice 指定了未声明的工具")
+		name, err := c.selectedTool(v)
+		if err != nil {
+			return nil, err
 		}
 		c.forced, c.required = name, true
+		c.restrict(map[string]bool{name: true})
 	default:
 		return nil, errors.New("无效的 tool_choice")
 	}
@@ -66,6 +89,33 @@ func readTools(source object) (*toolCatalog, error) {
 		return nil, errors.New("tool_choice=required 需要可用工具")
 	}
 	return c, nil
+}
+
+func (c *toolCatalog) selectedTool(choice object) (string, error) {
+	name := str(choice, "name")
+	if namespace := str(choice, "namespace"); namespace != "" {
+		name = namespace + "." + name
+	}
+	spec, ok := c.tools[name]
+	if !ok || spec.kind != str(choice, "type") {
+		return "", errors.New("tool_choice 指定了未声明的工具")
+	}
+	return name, nil
+}
+
+func (c *toolCatalog) restrict(selected map[string]bool) {
+	for key := range c.tools {
+		if !selected[key] {
+			delete(c.tools, key)
+		}
+	}
+	entries := []any{}
+	for _, raw := range c.entries {
+		if selected[str(raw.(object), "name")] {
+			entries = append(entries, raw)
+		}
+	}
+	c.entries = entries
 }
 func (c *toolCatalog) add(list []any, namespace string, depth int) error {
 	if depth > 4 {
@@ -76,7 +126,7 @@ func (c *toolCatalog) add(list []any, namespace string, depth int) error {
 		if !ok {
 			continue
 		}
-		name, kind := str(t, "name"), str(t, "type")
+		name, kind := strings.TrimSpace(str(t, "name")), strings.ToLower(strings.TrimSpace(str(t, "type")))
 		// _iter_client_tools in excel-codex-bridge only catalogs callable
 		// function/custom leaves. Other declarations are not BPS wire tools.
 		if kind != "function" && kind != "custom" && kind != "namespace" {
@@ -137,12 +187,16 @@ func (c *toolCatalog) add(list []any, namespace string, depth int) error {
 
 func (c *toolCatalog) instructions() string {
 	if len(c.tools) == 0 {
-		return "This is an external text-only Responses API request. Answer the user's request as assistant text. Do not invoke Excel, Office, workbook, connector, search, or other server tools."
+		return "This request comes from an external Responses API client. No client tools are available for this turn. Answer using the supplied inputs as assistant text. Do not invoke native Excel, Office, workbook, connector, search, or other server tools."
 	}
-	text := `This request is from an external Responses API client. The JSON catalog below describes the tools that the client can execute. Use the native run_officejs function solely as the relay envelope for exactly one catalog tool per response. Its code field must contain a serialized JSON object, never JavaScript or OfficeJS. For a function tool use {"name":"CATALOG_NAME","arguments":{...}}. For a custom tool use {"name":"CATALOG_NAME","input":"RAW_INPUT"}. Include summary, extended_summary, destructive=false and references=[] in the outer run_officejs arguments. Serialize strings correctly, preserving quotes and backslashes. Use the exact qualified catalog name for namespace tools. Do not nest run_officejs in code. The relay will return the requested tool's result on the next turn. Do not repeat calls whose results are already in the conversation. Do not invoke any other native Excel, workbook, Office, connector, search, or planning tool. Either call one catalog tool using this envelope or answer as assistant text.
+	text := `This request is from an external Codex/Responses API client. The JSON catalog below describes real tools executed by that client in its own environment, not in the Excel workbook. When asked to inspect a local project, invoke the declared shell or file tools to inspect it; the directory name alone is not the file contents. Do not claim that local files or shell access are unavailable when the catalog provides them. Follow the client's skill instructions and use its declared tools to read relevant SKILL.md files when needed. Never invent file contents or tool execution results.
+Use the native run_officejs function solely as a relay envelope containing exactly one catalog tool per call. Its code field must contain a serialized JSON object, never JavaScript or OfficeJS. For a function tool use {"name":"CATALOG_NAME","arguments":{...}}. For a custom tool use {"name":"CATALOG_NAME","input":"RAW_INPUT"}. Include summary, extended_summary, destructive=false and references=[] in the outer run_officejs arguments. Serialize strings correctly, preserving quotes and backslashes. Use the exact qualified catalog name for namespace tools. Do not nest run_officejs in code. The relay will return the requested tool's result on the next turn. Do not repeat calls whose results are already in the conversation. Do not invoke any other native Excel, workbook, Office, connector, search, or planning tool.
 Client tool catalog:
 `
 	text += string(encoded(c.entries))
+	if !c.parallel {
+		text += "\nInvoke at most one catalog tool in this response."
+	}
 	if c.forced != "" {
 		text += "\nThis response must call the catalog tool " + c.forced + "."
 	} else if c.required {
@@ -203,8 +257,15 @@ func (c *toolCatalog) convert(native object) (object, error) {
 		client["namespace"] = spec.namespace
 	}
 	if spec.kind == "custom" {
-		input, ok := inner["input"].(string)
-		if !ok || inner["arguments"] != nil || inner["args"] != nil {
+		value := inner["input"]
+		if args, exists := inner["args"]; exists {
+			if _, both := inner["input"]; both {
+				return nil, errors.New("custom 工具信封同时包含 input 和 args")
+			}
+			value = args
+		}
+		input, ok := value.(string)
+		if !ok || inner["arguments"] != nil {
 			return nil, errors.New("custom 工具需要字符串 input")
 		}
 		client["input"] = input
@@ -240,7 +301,8 @@ func transformResponse(ctx context.Context, response object, catalog *toolCatalo
 		return nil, errors.New("BPS 响应缺少 output 数组")
 	}
 	next := make([]any, 0, len(output))
-	var native, client object
+	var calls []struct{ native, client object }
+	callIDs, itemIDs := map[string]bool{}, map[string]bool{}
 	for _, v := range output {
 		item, ok := v.(object)
 		if !ok {
@@ -251,25 +313,28 @@ func transformResponse(ctx context.Context, response object, catalog *toolCatalo
 			if !success {
 				continue
 			}
-			if native != nil {
-				return nil, errors.New("BPS 返回多个工具；当前仅支持串行调用")
+			if len(calls) > 0 && !catalog.parallel {
+				return nil, errors.New("BPS 返回多个工具，但客户端禁止并行调用")
 			}
-			var err error
-			client, err = catalog.convert(item)
+			if callIDs[str(item, "call_id")] || itemIDs[str(item, "id")] {
+				return nil, errors.New("BPS 返回重复的工具调用身份")
+			}
+			client, err := catalog.convert(item)
 			if err != nil {
 				return nil, err
 			}
-			native = item
+			callIDs[str(item, "call_id")], itemIDs[str(item, "id")] = true, true
+			calls = append(calls, struct{ native, client object }{item, client})
 			next = append(next, client)
 		default:
 			next = append(next, normalizeOutput(item))
 		}
 	}
-	if success && native == nil && catalog.required {
+	if success && len(calls) == 0 && catalog.required {
 		return nil, errors.New("BPS 未遵守必须调用工具的 tool_choice")
 	}
-	if native != nil {
-		if err := store.save(ctx, native, client); err != nil {
+	for _, call := range calls {
+		if err := store.save(ctx, call.native, call.client); err != nil {
 			return nil, err
 		}
 	}

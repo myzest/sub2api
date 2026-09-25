@@ -84,8 +84,8 @@ func TestRequestConversionUsesReferenceWireFields(t *testing.T) {
 	if got := p.body["metadata"].(object); got["task_id"] != "caller-task" || got["turn_id"] != "caller-turn" || got["agent_iteration"] != "3" || got["extra"] != "keep" || got["nested"] != nil {
 		t.Fatal("scalar metadata was lost", got)
 	}
-	if digest(p.body["context_management"]) != digest([]any{object{"type": "compaction", "compact_threshold": 200000}}) {
-		t.Fatal("missing reference compaction default")
+	if p.body["context_management"] != nil {
+		t.Fatal("unspecified compaction policy must be omitted")
 	}
 	input := p.body["input"].([]any)
 	instructions := string(encoded(input[:2]))
@@ -95,8 +95,8 @@ func TestRequestConversionUsesReferenceWireFields(t *testing.T) {
 	source["stream"] = false
 	source["context_management"] = []any{}
 	p = mustPlan(t, s, source, 7)
-	if p.body["stream"] != false || len(p.body["context_management"].([]any)) != 0 {
-		t.Fatal("caller stream/context settings were overwritten")
+	if p.body["stream"] != false || p.body["context_management"] != nil {
+		t.Fatal("stream was overwritten or empty compaction policy was sent")
 	}
 	for _, tc := range []struct {
 		value, want string
@@ -260,7 +260,7 @@ func TestInvalidNativeToolsNeverBecomeClientCalls(t *testing.T) {
 	}
 	v := nativeItem("exec_command", object{"cmd": "pwd"})
 	if _, err := transformResponse(context.Background(), completed(v, v), p.tools, p.store, true); err == nil {
-		t.Fatal("parallel calls accepted")
+		t.Fatal("duplicate call IDs accepted")
 	}
 }
 

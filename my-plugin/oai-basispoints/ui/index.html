@@ -19,22 +19,40 @@
       <div><label for="timeout">请求超时（秒）</label><input id="timeout" type="number" min="10" max="3600" step="1"></div>
       <div><label for="ttl">工具回放保留（小时）</label><input id="ttl" type="number" min="1" max="168" step="1"></div>
     </div>
+    <label for="image-transport">图片传输</label>
+    <select id="image-transport"><option value="attachment">同源附件上传（默认）</option><option value="passthrough">原样透传（用于对照）</option></select>
+    <p class="hint">附件模式将内嵌图片上传到 BPS 同源附件接口，再传递文件 ID。保留原图与 detail，不自动降低图片精度。原样透传用于对照旧行为。</p>
     <label class="check"><input id="ultra" type="checkbox"> 允许实验性 ultra（原样传递，不回退到较低强度）</label>
     <p class="hint">客户端指定的 effort 优先；max 映射为 xhigh。回放存储包含工具参数，过期后需要开启新会话。</p>
     <button id="save" type="button">保存设置</button>
   </section>
   <section aria-labelledby="probe-title">
     <h2 id="probe-title">单账号探测</h2>
-    <p class="hint">无需导出凭据，无需已有 Excel 对话。探测会使用账号额度完成一次短文本请求；成功表示当前凭据可访问 BPS，不能证明模型“不降智”。</p>
+    <p class="hint">无需导出凭据，无需已有 Excel 对话。下方操作会先保存当前设置，再使用所选账号额度探测；同一时间只能运行一项，最长等待 120 秒。文本和图片各一次模型请求（附件模式的图片另需上传），工具最多两次模型请求。</p>
     <div class="grid">
       <div><label for="probe-account">账号</label><select id="probe-account"></select></div>
       <div><label for="probe-model">模型</label><select id="probe-model"></select></div>
       <div><label for="probe-effort">推理强度</label><select id="probe-effort"><option>low</option><option>medium</option><option>high</option><option>xhigh</option><option>ultra</option></select></div>
     </div>
-    <button id="probe" type="button">保存设置并探测</button>
+    <div class="grid">
+      <div><label for="image-detail">图片探测 detail</label><select id="image-detail"><option value="high">high（默认）</option><option value="auto">auto</option><option value="low">low</option><option value="original">original</option></select></div>
+    </div>
+    <p class="hint">图片探测生成一张随机数字图，验证所选传输方式与 detail；答案只用于本地比对。工具探测验证工具调用与两轮结果回放，使用模拟的客户端结果，不代表桌面端实际读取过本地文件。</p>
+    <div class="actions">
+      <button id="probe" type="button">保存并探测文本</button>
+      <button id="probe-image" class="secondary" type="button">保存并探测图片</button>
+      <button id="probe-tools" class="secondary" type="button">保存并探测工具</button>
+    </div>
     <div id="probe-result" class="result" role="status" aria-live="polite">尚未探测</div>
+    <figure id="image-preview" hidden><img id="image-preview-img" alt="本次图片探测生成的数字图"><figcaption class="hint">本次探测图片。正确答案与实际回复见上方结果。</figcaption></figure>
+    <p class="hint">探测成功只代表本次链路结果，不能证明模型“不降智”或所有 Codex 功能均可用。</p>
   </section>
-  <footer>v0.1.3 · 输入内容保留原字段，由 BPS 判断是否支持。工具仅桥接串行 function/custom；原生搜索与 /responses/compact 暂未接入。</footer>
+  <section aria-labelledby="diagnostic-title">
+    <div class="section-title"><h2 id="diagnostic-title">最近路由请求</h2><button id="refresh-diagnostic" class="secondary" type="button">刷新诊断</button></div>
+    <p class="hint">在 Codex 中重试“查看本地项目”后刷新，可查看最近一次已结束的 BPS 路由请求。这里只记录工具目录、调用数量与状态，不记录对话、工具参数、图片或 token；刷新不发送上游请求。文件读取、命令和 Skills 由 Codex 客户端的工具及权限执行。</p>
+    <div id="request-diagnostic" class="result" role="status" aria-live="polite">尚无已结束的 BPS 路由请求。</div>
+  </section>
+  <footer>v0.1.5 · 输入内容保留原字段，由 BPS 判断是否支持。支持 function/custom 工具桥接与结果回放，遵守客户端 parallel_tool_calls；原生搜索与 /responses/compact 暂未接入。</footer>
 </main>
 <script src="assets/bridge-v1.js"></script><script src="assets/model.js"></script><script src="assets/app.js"></script>
 </body></html>

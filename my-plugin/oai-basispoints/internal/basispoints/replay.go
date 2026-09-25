@@ -1,12 +1,14 @@
 package basispoints
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"regexp"
 	"strings"
@@ -115,7 +117,9 @@ func (r replayStore) load(ctx context.Context, handle string) (*replayRecord, er
 		return nil, errors.New("工具回放不存在或已过期；请保持账号、模型和完整会话历史，必要时开启新会话")
 	}
 	var record replayRecord
-	if len(v.Value) > 256<<10 || json.Unmarshal(v.Value, &record) != nil || record.AccountID != r.accountID || record.Scope != r.scope || record.ExpiresAt <= time.Now().Unix() || str(record.Native, "call_id") == "" || record.Client == nil {
+	decoder := json.NewDecoder(bytes.NewReader(v.Value))
+	decoder.UseNumber()
+	if len(v.Value) > 256<<10 || decoder.Decode(&record) != nil || decoder.Decode(new(any)) != io.EOF || record.AccountID != r.accountID || record.Scope != r.scope || record.ExpiresAt <= time.Now().Unix() || str(record.Native, "call_id") == "" || record.Client == nil {
 		return nil, errors.New("工具回放无效或已过期")
 	}
 	wantKey, err := r.key(str(record.Client, "call_id"))
@@ -196,6 +200,8 @@ func (r replayStore) restore(ctx context.Context, input []any) ([]any, error) {
 			// extension fields, changing only the native call identity/type.
 			item["type"] = "function_call_output"
 			item["call_id"] = record.Native["call_id"]
+			delete(item, "name")
+			delete(item, "namespace")
 			id := str(record.Native, "call_id")
 			if !strings.HasPrefix(id, "fc_") {
 				id = "fc_" + id

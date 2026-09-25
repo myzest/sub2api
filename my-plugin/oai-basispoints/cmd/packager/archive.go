@@ -54,7 +54,7 @@ type signature struct {
 
 func writePackage(path string, files map[string][]byte, runtimes map[string]runtimeEntry, key ed25519.PrivateKey, publisher string) error {
 	m := manifest{SchemaVersion: 1, ID: basispoints.PluginID, Name: "OpenAI Basis Points", Version: basispoints.Version,
-		Description: "使用已有 OAuth 账号连接 Basis Points，支持账号探测、串行工具与流式响应。", Author: "Local Sub2API Plugins",
+		Description: "使用已有 OAuth 账号连接 Basis Points，支持图片附件、客户端工具回放与可视化探测。", Author: "Local Sub2API Plugins",
 		Requires:     requirements{Sub2API: ">=0.2.8 <0.3.0", Recommended: "0.2.8", Tested: []string{}, PluginProtocol: 1, TransportAPI: 1, UIBridge: 1},
 		Capabilities: []capability{{ID: basispoints.Capability, Platform: "openai", AccountType: "oauth"}}, Runtimes: runtimes, UI: uiEntry{Entrypoint: "ui/index.html"}, Files: map[string]string{}}
 	archiveFiles := map[string][]byte{}

@@ -22,6 +22,7 @@ type relay struct {
 	done     map[int]object
 	response object
 	terminal string
+	observe  func(object) // Optional diagnostics for explicit probes only.
 }
 
 func newRelay(ctx context.Context, plan *requestPlan, emit eventWriter) *relay {
@@ -51,6 +52,9 @@ func nativeTool(item object) bool {
 	return str(item, "type") == "function_call" || str(item, "type") == "custom_tool_call"
 }
 func (r *relay) event(e object) (bool, error) {
+	if r.observe != nil {
+		r.observe(e)
+	}
 	t := str(e, "type")
 	switch t {
 	case "response.completed", "response.failed", "response.incomplete":
@@ -258,6 +262,9 @@ func (r *relay) consume(resp *http.Response) error {
 		body, err := decodeObject(raw)
 		if err != nil {
 			return err
+		}
+		if r.observe != nil {
+			r.observe(object{"type": "response." + str(body, "status"), "response": body})
 		}
 		status := str(body, "status")
 		if status != "completed" && status != "failed" && status != "incomplete" {

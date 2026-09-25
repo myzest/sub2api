@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
 	"net/url"
 	"strings"
@@ -15,12 +16,16 @@ import (
 )
 
 type forwardWriter struct {
-	stream  pluginv1.TransportPlugin_ForwardServer
-	started time.Time
-	bytes   int64
+	stream     pluginv1.TransportPlugin_ForwardServer
+	started    time.Time
+	bytes      int64
+	diagnostic *requestDiagnostic
 }
 
 func (w *forwardWriter) fail(code, message string, sent bool) error {
+	if w.diagnostic != nil {
+		w.diagnostic.Error = limitCharacters(code+": "+message, 1600)
+	}
 	return w.stream.Send(&pluginv1.ForwardResponse{Frame: &pluginv1.ForwardResponse_Error{Error: &pluginv1.ForwardResponseError{Code: code, Message: message, RequestSent: sent}}})
 }
 func (w *forwardWriter) start(resp *http.Response) error {
@@ -41,6 +46,13 @@ func (w *forwardWriter) end() error {
 	return w.stream.Send(&pluginv1.ForwardResponse{Frame: &pluginv1.ForwardResponse_End{End: &pluginv1.ForwardResponseEnd{BytesReceived: w.bytes, DurationMs: time.Since(w.started).Milliseconds()}}})
 }
 func (w *forwardWriter) json(status int, value any, headers http.Header) error {
+	if status >= 400 && w.diagnostic != nil {
+		if body, ok := value.(object); ok {
+			if failure, ok := body["error"].(object); ok {
+				w.diagnostic.Error = limitCharacters(str(failure, "code")+": "+str(failure, "message"), 1600)
+			}
+		}
+	}
 	data := encoded(value)
 	if headers == nil {
 		headers = http.Header{}
@@ -60,7 +72,7 @@ func (w *forwardWriter) reject(status int, code, message string) error {
 	return w.json(status, object{"error": object{"type": "invalid_request_error", "code": code, "message": message}}, nil)
 }
 
-func (s *Server) Forward(stream pluginv1.TransportPlugin_ForwardServer) error {
+func (s *Server) Forward(stream pluginv1.TransportPlugin_ForwardServer) (result error) {
 	w := &forwardWriter{stream: stream, started: time.Now()}
 	first, err := stream.Recv()
 	if err != nil {
@@ -74,6 +86,14 @@ func (s *Server) Forward(stream pluginv1.TransportPlugin_ForwardServer) error {
 	if !cfg.routes(start.AccountId) {
 		return s.passthrough(w, start)
 	}
+	d := &requestDiagnostic{ID: newID(), AccountID: start.AccountId, StartedAt: time.Now().Unix(), Stage: "request", ToolTypes: map[string]int{}, ToolNames: []string{}}
+	w.diagnostic = d
+	defer func() {
+		if result != nil && d.Error == "" {
+			d.Error = "客户端传输中断，响应未完整交付"
+		}
+		s.finishDiagnostic(d)
+	}()
 	u, err := url.Parse(start.Url)
 	if err != nil || start.Method != http.MethodPost || u == nil || !strings.HasSuffix(u.Path, "/responses") || strings.HasSuffix(u.Path, "//responses") {
 		return w.reject(400, "bps_unsupported_endpoint", "所选 BPS 账号仅支持 POST /responses；不支持 /responses/compact 或 /input_tokens")
@@ -87,10 +107,14 @@ func (s *Server) Forward(stream pluginv1.TransportPlugin_ForwardServer) error {
 	}
 	ctx, cancel := context.WithTimeout(stream.Context(), time.Duration(cfg.TimeoutSeconds)*time.Second)
 	defer cancel()
+	d.input(buffer.Bytes())
+	d.Stage = "prepare"
 	plan, err := s.prepare(ctx, buffer.Bytes(), start.AccountId, headersFromProto(start.Headers), cfg)
 	if err != nil {
 		return w.reject(400, "bps_invalid_request", err.Error())
 	}
+	d.catalog(plan.tools)
+	d.Stage = "identity"
 	headers, err := bpsHeaders(headersFromProto(start.Headers))
 	if err != nil {
 		return w.reject(400, "bps_identity", err.Error())
@@ -99,17 +123,34 @@ func (s *Server) Forward(stream pluginv1.TransportPlugin_ForwardServer) error {
 	if err != nil {
 		return w.fail("invalid_proxy", err.Error(), false)
 	}
+	if cfg.ImageTransport == "attachment" {
+		d.Stage = "upload"
+		report, err := s.uploadInputImages(ctx, plan, headers, start.ProxyUrl)
+		d.AttachmentHTTPStatus = report.HTTPStatus
+		if err != nil {
+			var failure *attachmentError
+			if errors.As(err, &failure) {
+				if failure.status != 0 {
+					return w.json(failure.status, object{"error": object{"type": "bps_attachment_error", "code": failure.code, "message": failure.text}}, failure.headers)
+				}
+				return w.fail(failure.code, failure.text, failure.sent)
+			}
+			return w.fail("bps_attachment", err.Error(), true)
+		}
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.responsesURL, bytes.NewReader(encoded(plan.body)))
 	if err != nil {
 		return w.fail("invalid_url", "BPS 地址无效", false)
 	}
 	req.Header = headers
+	d.Stage = "connect"
 	// Once RoundTrip is entered, conservatively prohibit host account replay.
 	resp, err := transport.RoundTrip(req)
 	if err != nil {
 		return w.fail("bps_transport", networkError(ctx, err), true)
 	}
 	defer resp.Body.Close()
+	d.Stage, d.HTTPStatus = "http", resp.StatusCode
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 64<<10))
 		return w.json(resp.StatusCode, object{"error": object{"type": "bps_upstream_error", "code": fmt.Sprintf("bps_http_%d", resp.StatusCode), "message": upstreamMessage(resp.StatusCode)}}, responseHeaders(resp.Header))
@@ -127,9 +168,17 @@ func (s *Server) Forward(stream pluginv1.TransportPlugin_ForwardServer) error {
 		}
 		emit = w.body
 	}
+	d.Stage = "response"
 	relay := newRelay(ctx, plan, emit)
 	if err := relay.consume(resp); err != nil {
 		return w.fail("bps_response", err.Error(), true)
+	}
+	d.Terminal = relay.terminal
+	d.OutputToolCalls = len(responseToolCalls(relay.response))
+	if relay.terminal == "response.completed" {
+		d.Stage = "completed"
+	} else {
+		d.Error = "BPS 返回 " + relay.terminal
 	}
 	if !plan.stream {
 		return w.json(200, relay.response, responseHeaders(resp.Header))
@@ -267,61 +316,82 @@ func (s *Server) passthrough(w *forwardWriter, start *pluginv1.ForwardRequestSta
 	return w.end()
 }
 
-func (s *Server) probeOnce(ctx context.Context, p *Probe, cfg Config) error {
-	i, err := s.identity(ctx, p.AccountID)
-	if err != nil {
-		return err
-	}
-	h := headersFromProto(i.Headers)
-	h.Set("Authorization", "Bearer "+i.Token)
-	headers, err := bpsHeaders(h)
-	if err != nil {
-		return err
-	}
-	source := object{"model": p.Model, "stream": false, "reasoning": object{"effort": p.Effort}, "input": "Reply with exactly BPS_OK. This is a text connectivity check. Do not call any tools.", "tools": []any{}, "tool_choice": "none"}
+func (s *Server) probeRound(ctx context.Context, p *Probe, cfg Config, source object, h, headers http.Header, proxy string) (object, error) {
+	started := time.Now()
+	p.HTTPStatus, p.RequestBytes = 0, 0
+	p.RequestID, p.ContentType, p.UpstreamError = "", "", ""
+	p.ResponseID, p.ReturnedModel, p.Usage, p.Attachment = "", "", nil, nil
+	p.Stage = "prepare"
+	s.publishProbe(p)
+	defer func() {
+		p.Rounds = append(p.Rounds, probeRoundResult{Round: p.Round, HTTPStatus: p.HTTPStatus, RequestID: p.RequestID, ResponseID: p.ResponseID, ReturnedModel: p.ReturnedModel, LatencyMS: time.Since(started).Milliseconds(), Usage: p.Usage})
+		s.publishProbe(p)
+	}()
 	plan, err := s.prepare(ctx, encoded(source), p.AccountID, h, cfg)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.responsesURL, bytes.NewReader(encoded(plan.body)))
+	if cfg.ImageTransport == "attachment" {
+		p.Stage = "upload"
+		s.publishProbe(p)
+		p.Attachment, err = s.uploadInputImages(ctx, plan, headers, proxy)
+		if err != nil {
+			return nil, err
+		}
+	}
+	body := encoded(plan.body)
+	p.RequestBytes = len(body)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.responsesURL, bytes.NewReader(body))
 	if err != nil {
-		return errors.New("BPS 地址无效")
+		return nil, errors.New("BPS 地址无效")
 	}
 	req.Header = headers
-	t, err := s.pool.get(i.ProxyUrl)
+	p.Stage = "connect"
+	s.publishProbe(p)
+	t, err := s.pool.get(proxy)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	resp, err := t.RoundTrip(req)
 	if err != nil {
-		return errors.New(networkError(ctx, err))
+		return nil, errors.New(networkError(ctx, err))
 	}
 	defer resp.Body.Close()
+	p.Stage = "http"
 	p.HTTPStatus = resp.StatusCode
+	p.ContentType, _, _ = mime.ParseMediaType(resp.Header.Get("Content-Type"))
+	p.RequestID = redactProbeText(resp.Header.Get("X-Request-Id"), headers, p.ImagePreview)
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return errors.New(upstreamMessage(resp.StatusCode))
-	}
-	r := newRelay(ctx, plan, nil)
-	if err := r.consume(resp); err != nil {
-		return err
-	}
-	p.ReturnedModel, p.ResponseID, p.Usage = str(r.response, "model"), str(r.response, "id"), r.response["usage"]
-	if r.terminal != "response.completed" {
-		return errors.New("BPS 返回 " + r.terminal + "；通道尚未通过探测")
-	}
-	text := ""
-	for _, v := range r.response["output"].([]any) {
-		item := v.(object)
-		if content, ok := item["content"].([]any); ok {
-			for _, part := range content {
-				if p, ok := part.(object); ok {
-					text += str(p, "text")
-				}
+		if raw, err := io.ReadAll(io.LimitReader(resp.Body, 64<<10)); err == nil {
+			if value, err := decodeObject(raw); err == nil {
+				p.UpstreamError = probeDiagnostic(value, headers, p.ImagePreview)
 			}
 		}
+		return nil, errors.New(upstreamMessage(resp.StatusCode))
 	}
-	if strings.TrimSpace(text) == "" {
-		return errors.New("BPS 返回 completed 但没有文本，探测未通过")
+	p.Stage = "response"
+	s.publishProbe(p)
+	r := newRelay(ctx, plan, nil)
+	r.observe = func(event object) {
+		if response, ok := event["response"].(object); ok {
+			if model := str(response, "model"); model != "" {
+				p.ReturnedModel = redactProbeText(model, headers, p.ImagePreview)
+			}
+			if id := str(response, "id"); id != "" {
+				p.ResponseID = redactProbeText(id, headers, p.ImagePreview)
+			}
+		}
+		if detail := probeDiagnostic(event, headers, p.ImagePreview); detail != "" {
+			p.UpstreamError = detail
+		}
 	}
-	return nil
+	if err := r.consume(resp); err != nil {
+		return nil, err
+	}
+	p.ReturnedModel = redactProbeText(str(r.response, "model"), headers, p.ImagePreview)
+	p.ResponseID, p.Usage = redactProbeText(str(r.response, "id"), headers, p.ImagePreview), r.response["usage"]
+	if r.terminal != "response.completed" {
+		return nil, errors.New("BPS 返回 " + r.terminal + "；通道尚未通过探测")
+	}
+	return r.response, nil
 }

@@ -19,26 +19,45 @@ type Account struct {
 	Schedulable bool   `json:"schedulable"`
 }
 type Probe struct {
-	ID            string `json:"id"`
-	AccountID     int64  `json:"account_id"`
-	Model         string `json:"model"`
-	Effort        string `json:"effort"`
-	State         string `json:"state"`
-	Message       string `json:"message"`
-	HTTPStatus    int    `json:"http_status,omitempty"`
-	ReturnedModel string `json:"returned_model,omitempty"`
-	ResponseID    string `json:"response_id,omitempty"`
-	Usage         any    `json:"usage,omitempty"`
-	LatencyMS     int64  `json:"latency_ms,omitempty"`
-	FinishedAt    int64  `json:"finished_at,omitempty"`
+	ID             string             `json:"id"`
+	AccountID      int64              `json:"account_id"`
+	Model          string             `json:"model"`
+	Effort         string             `json:"effort"`
+	State          string             `json:"state"`
+	Message        string             `json:"message"`
+	HTTPStatus     int                `json:"http_status,omitempty"`
+	ReturnedModel  string             `json:"returned_model,omitempty"`
+	ResponseID     string             `json:"response_id,omitempty"`
+	Usage          any                `json:"usage,omitempty"`
+	LatencyMS      int64              `json:"latency_ms,omitempty"`
+	FinishedAt     int64              `json:"finished_at,omitempty"`
+	Kind           string             `json:"kind,omitempty"`
+	Stage          string             `json:"stage,omitempty"`
+	ContentType    string             `json:"content_type,omitempty"`
+	RequestID      string             `json:"request_id,omitempty"`
+	RequestBytes   int                `json:"request_bytes,omitempty"`
+	UpstreamError  string             `json:"upstream_error,omitempty"`
+	ImageDetail    string             `json:"image_detail,omitempty"`
+	ImagePreview   string             `json:"image_preview,omitempty"`
+	ImageExpected  string             `json:"image_expected,omitempty"`
+	ImageReply     string             `json:"image_reply,omitempty"`
+	ImageTransport string             `json:"image_transport,omitempty"`
+	Attachment     *attachmentReport  `json:"attachment,omitempty"`
+	Round          int                `json:"round,omitempty"`
+	Rounds         []probeRoundResult `json:"rounds,omitempty"`
+	ToolName       string             `json:"tool_name,omitempty"`
+	ToolCalls      int                `json:"tool_calls,omitempty"`
+	ToolExpected   string             `json:"tool_expected,omitempty"`
+	ToolReply      string             `json:"tool_reply,omitempty"`
 }
 type Snapshot struct {
-	Instance  string    `json:"instance"`
-	HostReady bool      `json:"host_ready"`
-	Config    Config    `json:"config"`
-	Accounts  []Account `json:"accounts"`
-	LastError string    `json:"last_error,omitempty"`
-	Probe     *Probe    `json:"probe,omitempty"`
+	Instance    string             `json:"instance"`
+	HostReady   bool               `json:"host_ready"`
+	Config      Config             `json:"config"`
+	Accounts    []Account          `json:"accounts"`
+	LastError   string             `json:"last_error,omitempty"`
+	Probe       *Probe             `json:"probe,omitempty"`
+	LastRequest *requestDiagnostic `json:"last_request,omitempty"`
 }
 type commandResult struct {
 	fingerprint string
@@ -58,9 +77,11 @@ type Server struct {
 	accounts     []Account
 	lastError    string
 	probe        *Probe
+	lastRequest  *requestDiagnostic
 	commands     sync.Mutex
 	seen         map[string]commandResult
 	pool         transportPool
+	attachments  attachmentCache
 	responsesURL string // Fixed in production; only package tests may substitute a fixture.
 }
 
@@ -83,7 +104,7 @@ func (s *Server) Health(context.Context, *pluginv1.HealthRequest) (*pluginv1.Hea
 	defer s.mu.RUnlock()
 	c := s.cfg
 	c.Command = nil
-	raw := encoded(Snapshot{Instance: s.instance, HostReady: s.host != nil, Config: c, Accounts: s.accounts, LastError: s.lastError, Probe: s.probe})
+	raw := encoded(Snapshot{Instance: s.instance, HostReady: s.host != nil, Config: c, Accounts: s.accounts, LastError: s.lastError, Probe: s.probe, LastRequest: s.lastRequest})
 	return &pluginv1.HealthResponse{Healthy: true, Message: "Basis Points 插件运行中", StatusJson: string(raw)}, nil
 }
 func (s *Server) ValidateConfig(_ context.Context, r *pluginv1.ValidateConfigRequest) (*pluginv1.ValidateConfigResponse, error) {
@@ -226,7 +247,14 @@ func (s *Server) command(ctx context.Context, cfg Config) (any, error) {
 			err = errors.New("已有探测正在运行")
 		} else {
 			e, _ := effort(c.Effort, cfg.AllowUltra)
-			p := Probe{ID: c.ID, AccountID: c.AccountID, Model: c.Model, Effort: e, State: "running", Message: "正在使用宿主 OAuth 身份探测 BPS"}
+			p := Probe{ID: c.ID, AccountID: c.AccountID, Model: c.Model, Effort: e, Kind: "text", Stage: "identity", State: "running", Message: "正在使用宿主 OAuth 身份探测 BPS"}
+			if c.Action == "probe_image" {
+				p.Kind, p.ImageDetail = "image", c.ImageDetail
+				p.ImageTransport = cfg.ImageTransport
+			}
+			if c.Action == "probe_tools" {
+				p.Kind = "tools"
+			}
 			s.probe = &p
 			value = object{"probe_id": p.ID, "state": p.State}
 			go s.runProbe(p, cfg)
@@ -237,14 +265,20 @@ func (s *Server) command(ctx context.Context, cfg Config) (any, error) {
 	return value, err
 }
 
-// Probe status stores metadata only: no token, account claims, prompt or raw
-// upstream error body. Real generation probes are explicit and may consume quota.
+// Probes are explicit and may consume quota. Status may include the generated
+// test image and its answer, but never credentials or a raw upstream error body.
 func (s *Server) runProbe(p Probe, cfg Config) {
 	started := time.Now()
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(min(cfg.TimeoutSeconds, 120))*time.Second)
 	defer cancel()
 	err := s.probeOnce(ctx, &p, cfg)
 	p.State, p.Message = "succeeded", "BPS 接受此 OAuth 凭据并完成文本响应；不代表模型质量验收"
+	if p.Kind == "image" {
+		p.Message = "图片探测通过：BPS 返回了图中正确的六位数字；仅代表这一张测试图和当前 detail 的结果"
+	}
+	if p.Kind == "tools" {
+		p.Message = "工具探测通过：命名空间工具调用、转换及模拟结果的第二轮回放完成；不代表桌面端已实际执行本地工具"
+	}
 	if err != nil {
 		p.State, p.Message = "failed", err.Error()
 	}
