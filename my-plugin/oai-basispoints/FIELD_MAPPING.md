@@ -1,10 +1,10 @@
-# 字段处理与源码依据（0.1.12）
+# 字段处理与源码依据（0.1.13）
 
 这里的“有依据”指参考仓库已实现该行为，不代表本插件已在用户桌面端或 BPS 实机验证。用户已要求自行验收，本次不运行测试或探测。
 
 ## 固定参考版本
 
-- 本轮重新拉取的 HEAD：CPA `708082da2f851569984de395d25405e61c2bbc34`（v0.1.9），Excel bridge `66c41df941fb1a963801964c75ff24b4a19e93f2`（0.4.6）。新增 Images 接口与客户端配置依据见下方“0.1.12”；旧文本/识图实现保留原固定参考，不一并引入新参考中的自动重试或丢图策略。
+- 本轮复核的 HEAD：CPA `708082da2f851569984de395d25405e61c2bbc34`（v0.1.9），Excel bridge `66c41df941fb1a963801964c75ff24b4a19e93f2`（0.4.6）。Images 接口依据见“0.1.12”；0.1.13 按该 Excel 提交补齐 Responses 工具、流式及图片容错。完整函数对照、未照搬的历史行为及宿主边界见 [COMPATIBILITY.md](COMPATIBILITY.md)。
 - CPA：[`f4a2563`](https://github.com/JaxsonWang/cpa-plugin-oai-basispoints/tree/f4a2563647f807f5bc08e725fa933bcba28d2d11)，v0.1.8，MIT；用于本版附件上传、工具限制和回放、上下文配置修正。许可证随包附带。
 - Excel bridge：[`b2d6f25`](https://github.com/Kaixxrua/excel-codex-bridge/tree/b2d6f2529b6ffa9f1a630f17b7037ef6dcc0480a)，Unlicense；其 images.py 采用可抓取图片 URL，本插件选择 CPA 的同源附件方案，不引入临时公网图床或静默删图。
 - Codex additional_tools：依据 [OpenAI 官方工具搜索文档](https://developers.openai.com/api/docs/guides/tools-tool-search#add-tools-at-a-specific-point-in-the-input)、[本工作区宿主 Lite 转换](../../backend/internal/service/openai_responses_lite_tools.go)及 [EffectiveResponsesTools / custom exec 适配](../../backend/internal/pkg/apicompat/chatcompletions_responses_bridge.go)。两个参考的上述提交均仅收集顶层 tools，本版额外适配的是客户端/宿主入口，不宣称 BPS 原生支持该载体。
@@ -20,7 +20,7 @@
 | --- | --- |
 | input 字符串 | 转成 user message；input 数组中的非对象项忽略 |
 | 普通 message、未知 input.type | 整个对象保留，包括缺省 type、role、id、status、phase、content 和未知扩展字段；不统一转成纯文本 |
-| 嵌套 content | 保留图片、文件、音频、annotations 及其他未知内容块；默认附件模式单独处理 user message 的 data URL 图片，保留原图与 detail；不取回另一通道的 file_id |
+| 嵌套 content/output | 保留未知内容块；附件模式递归识别 input_image data URL。message 默认附件，其他类型先 inline，被 400/422 拒绝后改附件；解码/上传失败或最终仍被拒时插入明确缺图占位并诊断。普通 URL/file_id 不转换 |
 | 顶层 text/input_text/output_text | 保持原对象，不猜测 role 或改成 message |
 | internal_chat_message_metadata_passthrough | 从客户端 input 项的顶层删除，避免每轮私有 turn_id 破坏提示缓存；不递归删除同名业务字段 |
 | reasoning | 有非空 encrypted_content 时发送 type、summary:[]、encrypted_content；无加密内容时过滤 |
@@ -28,7 +28,7 @@
 | additional_tools | 收集 tools 中的 function/custom/namespace，保留原位置转为 developer 中继目录；原始 carrier 不送 BPS。相同叶子定义去重、冲突报错；本轮 tool_choice 限制同时作用于这些目录 |
 | compaction、compaction_summary、compaction_trigger | 普通透传，不删除 id/call_id，不额外检查加密内容，不重排位置 |
 | function/custom 调用 | 插件句柄优先恢复同范围 KV；未命中或外部完整历史按 CPA/Excel fallback 构造历史 run_officejs 输入，保留 namespace 与原始 payload；JSON 解码使用 UseNumber 保留大整数精度 |
-| function/custom 结果 | 保留 output 结构及扩展字段，恢复原生 call_id、function_call_output 类型和 fc_ ID，按 CPA v0.1.8 删除客户端 name/namespace；通常将 null 或空白字符串补为参考成功占位文本，但缺失原生记录的历史转换要求原始 output 存在且非 null |
+| function/custom 结果 | 保留 output 结构及扩展字段，恢复原生 call_id 和实际原生类型；function 结果规范为 fc_ ID，直接 custom 仍是 custom_tool_call_output；删除客户端 name/namespace。空结果补参考占位文本；update_plan 回放为 status:ok；unsupported run_officejs 结果换为一次正确封装指导，不自行执行重试 |
 
 原生工具回放按宿主账号、会话、模型和随机句柄隔离，命中后校验过期及调用内容。0.1.8 为非插件句柄接入完整历史 fallback；0.1.10 将相同处理扩展到合法插件句柄的 KV 未命中，匹配参考项目“rememberedNativeCall 无记录时转换完整调用”的行为。只消费本请求提供的完整调用及配对结果，不跨账号查 KV、不写入伪造原生记录、不发起旧工具执行。明确过期/损坏的已存记录、存储错误、孤立/重复/缺失结果继续拒绝。当前工具目录及 tool_choice 约束新输出，不重新限制已执行历史。0.1.9 的 custom input 类型、namespace 类型、异常多重前缀检查保留。跨模型加密状态与跨通道文件 ID 不在此修复范围。
 
@@ -42,15 +42,15 @@
 | model_selection、store | 固定 explicit、false，与参考实现一致 |
 | stream | 沿用客户端布尔值，不再强制上游 stream:true |
 | instructions | 变为前置 developer message；工具目录同样置于历史之前 |
-| reasoning.effort / reasoning_effort | 转为顶层 reasoning_effort。保留既有严格策略：未知值报错、不降低强度；max→xhigh，ultra 需开启。两处冲突报错 |
+| reasoning.effort / reasoning_effort | 转为顶层 reasoning_effort；API 输入规范大小写/空白，参考别名 x-high/extra-high/extra_high 及既有 max→xhigh；ultra 需开启。规范化后冲突或未知值报错，不静默降为 medium |
 | prompt_cache_key | 采用原值（去首尾空白），不改成插件 hash；缺省依次尝试 promptCacheKey、session_id、sessionId、client_metadata.session_id/sessionId，与 Excel 一致 |
 | context_management | 按 CPA v0.1.8，缺省/null/空数组省略，其他显式值透传给上游校验；不再强制默认 200000 |
 | service_tier | 按 CPA v0.1.8，客户端显式提供时透传 |
 | metadata | 保留字符串、数值、布尔标量，转为字符串，key/value 按 64/512 字符截取；嵌套对象/数组不转发。布尔值用 true/false（CPA 行为） |
-| metadata.task_id / turn_id / agent_iteration | 按 Excel 的 setdefault 语义保留调用方已有值；缺省采用确定性 UUIDv5 task/turn 和当前用户轮的工具结果数+1。CPA 会覆盖这些值，本插件选择 Excel 的保留规则 |
+| metadata.task_id / turn_id / agent_iteration | 保留调用方已有值；缺省确定性 task/turn，连续工具结果视为一轮，iteration 为轮数+1。先由原始客户端输入计算，图片改写和重试不改变身份 |
 | metadata.bps_tools_version_id | 作为调用方标量 metadata 保留，不另加工具版本发现请求 |
 | tools / tool_choice | 顶层及 input.additional_tools 的 function/custom/namespace 转入工具目录，不直接塞进 BPS tools；none 禁用，required、指定 function/custom、allowed_tools 过滤与要求由本插件校验；独立 namespace group choice 尚不支持；本轮工具限制不改变 KV 历史回放 |
-| parallel_tool_calls | false 时提示并强制最多一个调用；其他情况允许多个独立信封，全部校验/存储后才发客户端事件；此字段不直接进入 BPS body |
+| parallel_tool_calls | false 只选第一个有效调用；其他情况保留所有有效调用，跳过坏调用但记录数量，全部无效仍报错。保留调用均通过校验/存储后才发事件；此字段不直接进入 BPS body |
 | previous_response_id / conversation / background:true | 参考实现未提供所需的状态恢复或后台接口；本插件明确拒绝，避免无声丢失会话状态 |
 | max_output_tokens / temperature / top_p / text / truncation / include / 其余顶层字段 | 参考请求构造中不发送，本版同样不发送。这些选项在 BPS 通道不生效；不把“原样转发”误当作上游已支持 |
 
@@ -63,12 +63,15 @@
 | 项目 | 本版处理 |
 | --- | --- |
 | 普通 SSE | 不再用事件名白名单拒绝新类型；保留事件中的原字段，普通文本增量不再要求本地先收到 output_item.added |
-| 普通 output item | 不再用 type 白名单过滤；保留 content、annotations、phase 及扩展字段。reasoning 缺少 summary 时仅补空数组，不生成虚构的推理文本 |
-| function/custom 事件 | 原生工具名和参数暂存，只有终态严格校验的 run_officejs 信封能变成客户端工具事件；每信封一个工具，允许并行时可有多个，重复 ID 拒绝；不放行未声明原生工具 |
+| 普通 output item | 保留未知项及扩展字段；reasoning 按参考将现有 summary/content 文字规范到 summary_text/reasoning_text 并加显示标题；仅有 encrypted_content 时使用参考的完成占位文字，不解密或编造推理内容 |
+| function/custom 事件 | 暂存原生工具；终态校验 run_officejs 信封或已声明、类型匹配的直接原生调用。兼容旧 codex_client__ 名称，update_plan 按参考转换参数/结果。重复 ID、未声明工具不能释放 |
 | response.completed/failed/incomplete | 保留终态外层扩展字段和 response 中的 usage、model、ID、incomplete_details 等；移除非工具 item 的全对象相等要求。原生工具身份与参数的一致性仍校验 |
-| sequence_number | 工具事件被重建后重新连续编号；不能同时承诺原 sequence_number 不变 |
+| sequence_number / output_index | sequence_number 连续重编；跳过原生调用时暂存后续事件并按终态 output 重排索引与发送顺序，避免文本/工具错位 |
 | JSON 响应 | 非流客户端收到转换后的 JSON；流客户端遇到 JSON 回包时保留既有桥接。未知内容保留在 item/终态，不猜测新的内容增量协议 |
-| failed、incomplete、提前 EOF | 不伪造 completed，不释放失败响应中的原生工具 |
+| failed/incomplete | 保留实际失败状态，不释放其中的原生工具 |
+| 提前 EOF/传输断开 | 有真实 response ID、可靠连续索引且所有项 done、无未完成增量，末项为非 commentary 消息或工具时可恢复 completed；诊断标记且省略未知 usage。其余提前结束仍失败 |
+| 静默与末块 | 实际流开始后每 15 秒静默保活；无空行的完整末块仍解析。终态后的断线不推翻结果，取消时停止保活并关闭读取器 |
+| 非流式重试 | 可识别的 HTTP EOF/帧中断仅一次；普通超时、JSON/信封/Schema 错误及流式请求不适用；Responses 图片 400/422 的策略回退单独记录 |
 | 错误 | HTTP 状态码和限流/request ID headers 保留；客户端错误附诊断 ID，后台记录来源、信封形态与有界解析类别/偏移、回放计数，不记录工具参数正文；原始上游错误、failed.error 和流内错误不直接转发 |
 
 ## 0.1.4 新增依据
@@ -116,7 +119,7 @@
 - 状态新增 `diagnostic_generation` 与 `diagnostics_cleared_at`，只用于清空后的请求归档和 UI 选择同步。清空时更新代次及两个内存历史，旧代次在途请求完成后跳过归档。
 - 当时仅依据旧参考评估普通生图通道；新参考提供独立 BPS Images 路径，0.1.12 已替换此前接入方案，见上节。
 
-## 0.1.10 运维反馈修正
+## 0.1.10 运维反馈修正（历史，信封容错已由 0.1.13 扩展）
 
 - 信封解包依据 [CPA transportEnvelope](https://github.com/JaxsonWang/cpa-plugin-oai-basispoints/blob/708082da2f851569984de395d25405e61c2bbc34/internal/basispoints/protocol.go#L623)：最多两层，仍是单工具 JSON 信封。
 - 围栏兼容取自 [Excel _decode_transport_code](https://github.com/Kaixxrua/excel-codex-bridge/blob/b2d6f2529b6ffa9f1a630f17b7037ef6dcc0480a/src/excel_codex_bridge/excel_upstream.py#L396) 的较窄子集：仅完整 JSON/无语言围栏，不扫描任意文本中的第一个对象，不修非法反斜杠。解析仍拒绝重复键、多对象、尾随数据及过深嵌套；偏移以当前层解码内容为准。
@@ -127,11 +130,11 @@
 
 本次未取得两条 JSON 解析故障的原始 code 形态，也未取得新回放故障发生前后的范围指纹。兼容路径有参考依据，但不能宣称已复现或已实机解决全部反馈。
 
-## 0.1.9 审查修正
+## 0.1.9 审查修正（历史）
 
 - `sameCall` 原先使用 `str` 比较 custom input，导致空字符串与缺失/null/错误类型相等；现在要求两侧都为原始字符串。对象、数组、数字等错误类型的 namespace 不再静默退化为无 namespace。
 - `replayHandleKind` 原先只剥一个前缀，`call_ctc_bp_…` 可被当作外部历史；现在仅为识别保留标记而逐层剥离已知前缀，并将其判为无效插件句柄，不增加可加载的 KV ID 格式。
 - `attachmentReport` 的 HTTP 字段原先跨图片共用且未在新尝试前清空；现在逐次重置，记录尝试次数与逐图 HTTP。UI 将汇总字段标为最近一次上传尝试，区分全缓存命中和后续上传未收到 HTTP 响应。
 - 附件非 2xx 改用 `readUpstreamDiagnostic`，与 Responses 共用大小上限、已知请求值/引号内容/URL/不透明串脱敏和采集状态。保留上传状态及限流响应头，不把诊断读取失败改判为未知网络错误。
 
-以上修改来自本地可达代码路径审查，不引入新的 BPS 请求字段、上传协议、自动重试或执行能力。这里只承诺字段处理与所列源码行为对应；不增加原生搜索/计算机/MCP/tool_search 映射、独立 compact/input_tokens 端点、凭据交换或新的后台操作。客户端未声明工具、非法 JSON、失效回放等严格错误仍保留。工具结果中的图片目前只透传；没有根据用户消息附件的规则猜测另一种上传协议。
+以上是 0.1.9 当时的审查范围；当时未加入图片重试或工具结果图片上传。0.1.13 依据新 Excel images.py 扩展这些路径，见当前表格及 COMPATIBILITY.md。原生搜索/计算机/MCP/tool_search、独立 compact/input_tokens 和凭据交换仍不在已实现范围。

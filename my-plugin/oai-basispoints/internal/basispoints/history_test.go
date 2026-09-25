@@ -124,3 +124,19 @@ func TestImportedHistoryDoesNotAcceptWrappedPluginHandles(t *testing.T) {
 		t.Fatal("imported namespace must not be silently discarded")
 	}
 }
+
+func TestImportedHistoryRequiresAnExplicitNonNullResult(t *testing.T) {
+	plan := mustPlan(t, fixtureServer(), fixtureRequest(), 7)
+	call := object{"type": "function_call", "name": "exec_command", "call_id": "old_call", "arguments": `{"cmd":"pwd"}`}
+	for _, output := range []object{
+		{"type": "function_call_output", "call_id": "old_call"},
+		{"type": "function_call_output", "call_id": "old_call", "output": nil},
+	} {
+		if _, err := plan.store.restore(context.Background(), []any{call, output}); err == nil {
+			t.Fatal("missing imported result became success")
+		}
+	}
+	if _, err := plan.store.restore(context.Background(), []any{call, object{"type": "function_call_output", "call_id": "old_call", "output": ""}}); err != nil {
+		t.Fatal("explicit empty result rejected", err)
+	}
+}

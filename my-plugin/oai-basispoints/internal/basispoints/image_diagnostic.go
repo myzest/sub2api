@@ -3,6 +3,7 @@ package basispoints
 import (
 	"fmt"
 	"mime"
+	"slices"
 	"strings"
 )
 
@@ -81,23 +82,29 @@ func summarizeImages(source object) ([]imageDiagnostic, int) {
 		}
 		result = append(result, d)
 	}
-	input, _ := source["input"].([]any)
-	for index, raw := range input {
-		item, ok := raw.(object)
-		if !ok {
-			continue
-		}
-		path := fmt.Sprintf("input[%d]", index)
-		add(item, path)
-		for _, key := range []string{"content", "output"} {
-			parts, _ := item[key].([]any)
-			for offset, raw := range parts {
-				if part, ok := raw.(object); ok {
-					add(part, fmt.Sprintf("%s.%s[%d]", path, key, offset))
-				}
+	var walk func(any, string)
+	walk = func(value any, path string) {
+		switch v := value.(type) {
+		case []any:
+			for index, item := range v {
+				walk(item, fmt.Sprintf("%s[%d]", path, index))
+			}
+		case object:
+			if str(v, "type") == "additional_tools" {
+				return
+			} // Tool schema examples are not input pictures.
+			add(v, path)
+			keys := make([]string, 0, len(v))
+			for key := range v {
+				keys = append(keys, key)
+			}
+			slices.Sort(keys)
+			for _, key := range keys {
+				walk(v[key], path+"."+imagePathKey(key))
 			}
 		}
 	}
+	walk(source["input"], "input")
 	pictures, _ := source["images"].([]any)
 	for index, raw := range pictures {
 		if picture, ok := raw.(object); ok {
@@ -107,4 +114,12 @@ func summarizeImages(source object) ([]imageDiagnostic, int) {
 		}
 	}
 	return result, count
+}
+
+func imagePathKey(key string) string {
+	switch key {
+	case "content", "output", "images", "image":
+		return key
+	}
+	return "*" // Arbitrary object keys may themselves contain private data.
 }

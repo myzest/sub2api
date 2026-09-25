@@ -148,7 +148,7 @@ func (r replayStore) load(ctx context.Context, handle string) (*replayRecord, er
 	var record replayRecord
 	decoder := json.NewDecoder(bytes.NewReader(v.Value))
 	decoder.UseNumber()
-	if len(v.Value) > 256<<10 || decoder.Decode(&record) != nil || decoder.Decode(new(any)) != io.EOF || str(record.Native, "call_id") == "" || record.Client == nil {
+	if len(v.Value) > 256<<10 || decoder.Decode(&record) != nil || decoder.Decode(new(any)) != io.EOF || str(record.Native, "call_id") == "" || str(record.Native, "id") == "" || !nativeTool(record.Native) || !nativeTool(record.Client) {
 		return nil, &replayError{"invalid_record", "工具回放记录损坏或缺少必要字段"}
 	}
 	if record.AccountID != r.accountID || record.Scope != r.scope {
@@ -240,6 +240,7 @@ func (r replayStore) restore(ctx context.Context, input []any) (restored []any, 
 				var native object
 				native, err = historicalTransportCall(item)
 				record = &replayRecord{Native: native, Client: item}
+				rebuiltKeys[key] = true // Imported history also has no native record to verify against.
 				imported++
 			} else {
 				record, err = r.load(ctx, handle)
@@ -284,14 +285,18 @@ func (r replayStore) restore(ctx context.Context, input []any) (restored []any, 
 			}
 			// Match _normalized_tool_output: retain structured output and
 			// extension fields, changing only the native call identity/type.
-			item["type"] = "function_call_output"
+			item["type"] = str(record.Native, "type") + "_output"
 			item["call_id"] = record.Native["call_id"]
 			delete(item, "name")
 			delete(item, "namespace")
-			item["id"] = functionItemID(str(record.Native, "call_id"))
-			if text, ok := item["output"].(string); (ok && strings.TrimSpace(text) == "") || item["output"] == nil {
-				item["output"] = "(tool call succeeded with no output)"
+			if str(record.Native, "type") == "function_call" {
+				item["id"] = functionItemID(str(record.Native, "call_id"))
+			} else {
+				// A directly declared native custom tool remains custom; only a
+				// run_officejs-backed custom call becomes function_call_output.
+				delete(item, "id")
 			}
+			item["output"] = normalizeNativeToolOutput(record.Native, item["output"])
 			output = append(output, item)
 		}
 	}

@@ -21,7 +21,7 @@
     </div>
     <label for="image-transport">图片传输</label>
     <select id="image-transport"><option value="attachment">同源附件上传（默认）</option><option value="passthrough">原样透传（用于对照）</option></select>
-    <p class="hint">附件模式将内嵌图片上传到 BPS 同源附件接口，再传递文件 ID。保留原图与 detail，不自动降低图片精度。原样透传用于对照旧行为。</p>
+    <p class="hint">附件模式支持同源上传、旧缓存重传与工具结果图片回退，保留原图与 detail。无法上传或持续被拒的图片会换成明确缺图提示，并在诊断中显示省略数量；此时不能当作识图成功。原样透传用于对照旧行为。</p>
     <label class="check"><input id="ultra" type="checkbox"> 允许实验性 ultra（原样传递，不回退到较低强度）</label>
     <p class="hint">客户端指定的 effort 优先；max 映射为 xhigh。回放存储包含工具参数；记录缺失时，需要客户端发送完整调用和结果才能转换历史。</p>
     <button id="save" type="button">保存设置</button>
@@ -75,7 +75,7 @@
     <select id="request-history" disabled><option value="">最新完成请求（刷新时自动跟随）</option></select>
     <div id="request-diagnostic" class="result" role="status" aria-live="polite">尚无已结束的 BPS 路由请求。</div>
   </section>
-  <footer>v0.1.12 · 接入 BPS 生图/改图接口与 Codex 客户端配置说明；hosted image_generation、原生搜索与 /responses/compact 暂未接入。</footer>
+  <footer>v0.1.13 · 补齐工具信封、流式保活/断流收尾、图片重传与诊断；保留独立生图/改图。hosted image_generation、原生搜索与 /responses/compact 暂未接入。</footer>
 </main>
 <script src="assets/bridge-v1.js"></script><script src="assets/model.js"></script><script src="assets/app.js"></script>
 </body></html>

@@ -29,6 +29,14 @@ test('diagnostic separates local rejection, relay failure and recovered history'
   const recovered=model.requestText({account_id:7,replay:{scope_fingerprint:'aabbcc',native_hits:0,missing:1,rebuilt:1}});
   assert.match(recovered,/缺失原生记录 1/);assert.match(recovered,/未重新执行旧工具/);
 });
+test('compatibility diagnostics retain earlier refusal and distinguish omitted pictures from success',()=>{
+  const value=model.requestText({account_id:7,http_status:200,terminal:'response.completed',response_attempts:3,protocol_retries:0,image_fallbacks:['refresh_cached_attachments','omit_rejected_images'],response_retries:[{attempt:1,http_status:400,reason:'refresh_cached_attachments',request_id:'refused-first',upstream_error:'Invalid input format'}],omitted_images:1,completion_recovered:true,keepalives:2,skipped_tools:1,relay:[{state:'decoded',unwrapped:0,fields:[{layer:0,field:'code',type:'string',bytes:80,extracted:true,backslashes_repaired:1}]}]});
+  assert.match(value,/HTTP 400/);assert.match(value,/refused-first/);assert.match(value,/不能算作识图成功/);
+  assert.match(value,/未伪造 usage/);assert.match(value,/反斜杠兼容 1 处/);assert.match(value,/已提取完整 JSON 对象/);
+  const image=model.requestText({account_id:7,image_operation:'generations',http_status:200,client_http_status:200,error:'no b64_json',generated_images:0});
+  assert.match(image,/HTTP 200 不代表出图/);assert.doesNotMatch(image,/流内失败/);
+});
+
 test('bridge rejects forged messages and resolves only the matching parent/token/request',async()=>{
   const handlers={},sent=[],timers=new Map();let timerID=0;
   const parent={postMessage:(message)=>sent.push(message)};

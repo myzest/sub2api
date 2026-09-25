@@ -63,13 +63,13 @@ func (s *Server) prepare(ctx context.Context, raw []byte, accountID int64, heade
 			if !ok {
 				return nil, errors.New("reasoning.effort 必须为字符串")
 			}
-			if flat, exists := source["reasoning_effort"]; exists && flat != value {
+			if flat, exists := source["reasoning_effort"]; exists && requestEffortName(flat.(string)) != requestEffortName(value) {
 				return nil, errors.New("两处 reasoning effort 设置冲突")
 			}
 			requested = value
 		}
 	}
-	e, err := effort(requested, cfg.AllowUltra)
+	e, err := effort(requestEffortName(requested), cfg.AllowUltra)
 	if err != nil {
 		return nil, err
 	}
@@ -130,6 +130,18 @@ func (s *Server) prepare(ctx context.Context, raw []byte, accountID int64, heade
 	}
 	return &requestPlan{body: body, stream: stream, tools: tools, store: store}, nil
 }
+
+// Excel _normalize_reasoning_effort: only documented aliases are accepted.
+// Unknown values still fail explicitly instead of silently selecting medium.
+func requestEffortName(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	switch value {
+	case "x-high", "extra-high", "extra_high", "max":
+		return "xhigh"
+	}
+	return value
+}
+
 func message(role, text string) object {
 	return object{"type": "message", "role": role, "content": []any{object{"type": "input_text", "text": text}}}
 }
@@ -211,12 +223,15 @@ func turnState(raw any) (string, string) {
 		prefix = input[:lastUser+1]
 	}
 	iteration := 1
+	inResults := false
 	for _, value := range input[lastUser+1:] {
-		if item, ok := value.(object); ok {
-			if t := str(item, "type"); t == "function_call_output" || t == "custom_tool_call_output" {
-				iteration++
-			}
+		item, _ := value.(object)
+		t := str(item, "type")
+		isResult := t == "function_call_output" || t == "custom_tool_call_output"
+		if isResult && !inResults {
+			iteration++
 		}
+		inResults = isResult
 	}
 	return digest(prefix), strconv.Itoa(iteration)
 }

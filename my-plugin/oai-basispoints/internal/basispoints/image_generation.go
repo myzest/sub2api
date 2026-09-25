@@ -224,11 +224,21 @@ func (s *Server) forwardImages(ctx context.Context, w *forwardWriter, start *plu
 	pictures, _ := payload["data"].([]any)
 	for _, raw := range pictures {
 		picture, _ := raw.(object)
-		if str(picture, "b64_json") != "" || str(picture, "url") != "" {
+		if strings.TrimSpace(str(picture, "b64_json")) != "" {
 			d.GeneratedImages++
 		}
 	}
 	d.Stage, d.Terminal = "completed", "images.completed"
+	if payload["error"] != nil {
+		d.Stage, d.Terminal, d.ErrorSource = "response", "images.failed", "upstream_response"
+		d.Error = "bps_image_response: HTTP 200 的 Images JSON 包含 error；宿主将按错误处理"
+		d.UpstreamError, d.UpstreamErrorState = readUpstreamDiagnostic(bytes.NewReader(data), headers, raw, source)
+	} else if d.GeneratedImages == 0 {
+		// The host's parseCodexDirectImagesResponse only accepts b64_json.
+		// A URL-only/empty JSON cannot be marked completed in diagnostics.
+		d.Stage, d.Terminal, d.ErrorSource = "response", "images.incomplete", "response_conversion"
+		d.Error = "bps_image_response: Images JSON 没有宿主可接收的 b64_json 图片条目"
+	}
 	// Preserve the Images API payload, including usage and b64_json, for the
 	// host's existing image accounting and the client's image file handling.
 	return w.json(response.StatusCode, payload, responseHeaders(response.Header))

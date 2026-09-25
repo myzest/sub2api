@@ -97,6 +97,7 @@ type Server struct {
 	seen                 map[string]commandResult
 	pool                 transportPool
 	attachments          attachmentCache
+	refusedPictureKinds  map[string]bool
 	responsesURL         string // Fixed in production; only package tests may substitute a fixture.
 }
 

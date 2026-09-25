@@ -179,95 +179,140 @@ func (s *Server) Forward(stream pluginv1.TransportPlugin_ForwardServer) (result 
 	if err != nil {
 		return w.fail("invalid_proxy", err.Error(), false)
 	}
+	var pictures *pictureFallback
 	if cfg.ImageTransport == "attachment" {
-		d.Stage = "upload"
-		report, err := s.uploadInputImages(ctx, plan, headers, start.ProxyUrl)
-		d.AttachmentHTTPStatus = report.HTTPStatus
-		d.Attachment = report
-		d.UpstreamImages, _ = summarizeImages(plan.body)
-		if err != nil {
-			d.ErrorSource = "attachment"
-			var failure *attachmentError
-			if errors.As(err, &failure) {
-				if failure.status != 0 {
-					return w.json(failure.status, object{"error": object{"type": "bps_attachment_error", "code": failure.code, "message": failure.text}}, failure.headers)
+		pictures = s.newPictureFallback(plan, headers, start.ProxyUrl)
+	}
+	for {
+		// Previous attempts are retained separately. A canceled upload on the
+		// next attempt must not inherit the earlier Responses HTTP/Request ID.
+		d.HTTPStatus, d.ClientHTTPStatus, d.UpstreamRequestBytes = 0, 0, 0
+		d.ErrorSource, d.RequestID, d.ContentType, d.UpstreamError, d.UpstreamErrorState = "", "", "", "", ""
+		d.UpstreamImages = nil
+		if pictures != nil {
+			d.Stage = "upload"
+			err := pictures.rewrite(ctx)
+			report := pictures.report
+			d.AttachmentHTTPStatus = report.HTTPStatus
+			d.Attachment = report
+			d.UpstreamStarted = d.UpstreamStarted || report.Attempts > 0
+			d.OmittedImages = pictures.omitted
+			if err != nil {
+				d.ErrorSource = "attachment"
+				var failure *attachmentError
+				if errors.As(err, &failure) {
+					if failure.status != 0 {
+						return w.json(failure.status, object{"error": object{"type": "bps_attachment_error", "code": failure.code, "message": failure.text}}, failure.headers)
+					}
+					return w.fail(failure.code, failure.text, failure.sent)
 				}
-				return w.fail(failure.code, failure.text, failure.sent)
+				if ctx.Err() != nil {
+					d.ErrorSource = "request_timeout_or_canceled"
+				}
+				return w.fail("bps_attachment", err.Error(), d.UpstreamStarted)
 			}
-			return w.fail("bps_attachment", err.Error(), true)
 		}
-	}
-	d.UpstreamImages, _ = summarizeImages(plan.body)
-	body := encoded(plan.body)
-	d.UpstreamRequestBytes = len(body)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.responsesURL, bytes.NewReader(body))
-	if err != nil {
-		return w.fail("invalid_url", "BPS 地址无效", false)
-	}
-	req.Header = headers
-	d.Stage = "connect"
-	// Once RoundTrip is entered, conservatively prohibit host account replay.
-	d.ResponsesStarted = true
-	d.UpstreamStarted = true
-	resp, err := transport.RoundTrip(req)
-	if err != nil {
-		d.ErrorSource = "upstream_transport"
-		if ctx.Err() != nil {
-			d.ErrorSource = "request_timeout_or_canceled"
+		d.UpstreamImages, _ = summarizeImages(plan.body)
+		body := encoded(plan.body)
+		d.UpstreamRequestBytes = len(body)
+		if len(body) > maxBody {
+			return w.reject(400, "bps_request_body", "转换后的 BPS 请求超过 8 MiB")
 		}
-		return w.fail("bps_transport", networkError(ctx, err), true)
-	}
-	defer resp.Body.Close()
-	d.Stage, d.HTTPStatus = "http", resp.StatusCode
-	d.ContentType, _, _ = mime.ParseMediaType(resp.Header.Get("Content-Type"))
-	d.RequestID = redactProbeText(resp.Header.Get("X-Request-Id"), headers, "")
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		d.ErrorSource = "upstream_http"
-		d.UpstreamError, d.UpstreamErrorState = readUpstreamDiagnostic(resp.Body, headers, buffer.Bytes(), plan.body)
-		return w.json(resp.StatusCode, object{"error": object{"type": "bps_upstream_error", "code": fmt.Sprintf("bps_http_%d", resp.StatusCode), "message": upstreamMessage(resp.StatusCode)}}, responseHeaders(resp.Header))
-	}
-	var emit eventWriter
-	if plan.stream {
-		header := responseHeaders(resp.Header)
-		header.Set("Content-Type", "text/event-stream")
-		header.Set("Cache-Control", "no-cache")
-		header.Set("X-Accel-Buffering", "no")
-		copy := *resp
-		copy.Header, copy.ContentLength = header, -1
-		if err := w.start(&copy); err != nil {
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.responsesURL, bytes.NewReader(body))
+		if err != nil {
+			return w.fail("invalid_url", "BPS 地址无效", false)
+		}
+		req.Header = headers
+		d.Stage = "connect"
+		// Once RoundTrip is entered, conservatively prohibit host account replay.
+		d.ResponsesStarted = true
+		d.UpstreamStarted = true
+		d.ResponseAttempts++
+		resp, err := transport.RoundTrip(req)
+		if err != nil {
+			if !plan.stream && d.ProtocolRetries == 0 && ctx.Err() == nil && protocolInterruption(err) {
+				d.ProtocolRetries++
+				d.retry("protocol_interruption")
+				continue
+			}
+			d.ErrorSource = "upstream_transport"
+			if ctx.Err() != nil {
+				d.ErrorSource = "request_timeout_or_canceled"
+			}
+			return w.fail("bps_transport", networkError(ctx, err), true)
+		}
+		defer resp.Body.Close()
+		d.Stage, d.HTTPStatus = "http", resp.StatusCode
+		d.ContentType, _, _ = mime.ParseMediaType(resp.Header.Get("Content-Type"))
+		d.RequestID = redactProbeText(resp.Header.Get("X-Request-Id"), headers, "")
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			d.ErrorSource = "upstream_http"
+			d.UpstreamError, d.UpstreamErrorState = readUpstreamDiagnostic(resp.Body, headers, buffer.Bytes(), plan.body)
+			if pictures != nil && ctx.Err() == nil {
+				if action := pictures.retry(resp.StatusCode); action != "" {
+					d.retry(action)
+					if len(d.ImageFallbacks) < 16 {
+						d.ImageFallbacks = append(d.ImageFallbacks, action)
+					}
+					resp.Body.Close()
+					continue
+				}
+			}
+			return w.json(resp.StatusCode, object{"error": object{"type": "bps_upstream_error", "code": fmt.Sprintf("bps_http_%d", resp.StatusCode), "message": upstreamMessage(resp.StatusCode)}}, responseHeaders(resp.Header))
+		}
+		var emit eventWriter
+		if plan.stream {
+			header := responseHeaders(resp.Header)
+			header.Set("Content-Type", "text/event-stream")
+			header.Set("Cache-Control", "no-cache")
+			header.Set("X-Accel-Buffering", "no")
+			copy := *resp
+			copy.Header, copy.ContentLength = header, -1
+			if err := w.start(&copy); err != nil {
+				return err
+			}
+			emit = w.body
+		}
+		d.Stage = "response"
+		relay := newRelay(ctx, plan, emit)
+		relay.observe = d.observe
+		consumeErr := relay.consume(resp)
+		d.Keepalives += relay.keepalives
+		d.CompletionRecovered = relay.recovered
+		d.SkippedTools = plan.tools.skippedTools
+		if err := consumeErr; err != nil {
+			if !plan.stream && d.ProtocolRetries == 0 && ctx.Err() == nil && protocolInterruption(err) {
+				d.ProtocolRetries++
+				d.retry("protocol_interruption")
+				resp.Body.Close()
+				continue
+			}
+			d.ErrorSource = "response_conversion"
+			var decodeErr *relayDecodeError
+			if errors.As(err, &decodeErr) {
+				d.ErrorSource = "tool_relay"
+			}
+			if ctx.Err() != nil {
+				d.ErrorSource = "request_timeout_or_canceled"
+			}
+			return w.fail("bps_response", err.Error(), true)
+		}
+		d.Terminal = relay.terminal
+		d.OutputToolCalls = len(responseToolCalls(relay.response))
+		if relay.terminal == "response.completed" {
+			d.Stage = "completed"
+		} else {
+			d.Error = "BPS 返回 " + relay.terminal
+			d.ErrorSource = "upstream_response"
+		}
+		if !plan.stream {
+			return w.json(200, relay.response, responseHeaders(resp.Header))
+		}
+		if err := w.body([]byte("data: [DONE]\n\n")); err != nil {
 			return err
 		}
-		emit = w.body
+		return w.end()
 	}
-	d.Stage = "response"
-	relay := newRelay(ctx, plan, emit)
-	relay.observe = d.observe
-	if err := relay.consume(resp); err != nil {
-		d.ErrorSource = "response_conversion"
-		var decodeErr *relayDecodeError
-		if errors.As(err, &decodeErr) {
-			d.ErrorSource = "tool_relay"
-		}
-		if ctx.Err() != nil {
-			d.ErrorSource = "request_timeout_or_canceled"
-		}
-		return w.fail("bps_response", err.Error(), true)
-	}
-	d.Terminal = relay.terminal
-	d.OutputToolCalls = len(responseToolCalls(relay.response))
-	if relay.terminal == "response.completed" {
-		d.Stage = "completed"
-	} else {
-		d.Error = "BPS 返回 " + relay.terminal
-		d.ErrorSource = "upstream_response"
-	}
-	if !plan.stream {
-		return w.json(200, relay.response, responseHeaders(resp.Header))
-	}
-	if err := w.body([]byte("data: [DONE]\n\n")); err != nil {
-		return err
-	}
-	return w.end()
 }
 
 func responseHeaders(in http.Header) http.Header {

@@ -14,13 +14,15 @@ type toolSpec struct {
 	schema                     *jsonschema.Schema
 }
 type toolCatalog struct {
-	tools        map[string]toolSpec
-	entries      []any
-	entriesAt    map[int][]any
-	required     bool
-	forced       string
-	parallel     bool
-	observeRelay func(relayDiagnostic)
+	tools         map[string]toolSpec
+	entries       []any
+	entriesAt     map[int][]any
+	required      bool
+	forced        string
+	parallel      bool
+	observeRelay  func(relayDiagnostic)
+	outputIndices []int
+	skippedTools  int
 }
 type noExternalSchemas struct{}
 
@@ -218,8 +220,11 @@ Client tool catalog:
 		"code": string(encoded(object{"name": "EXACT_CATALOG_NAME", "input": "const path = \"C:\\\\workspace\\\\file.txt\";\nconst quoted = \"\\\"hello\\\"\";"})),
 	}))
 	text += "\nSerialize the inner object once, then JSON-escape that string as the outer code value. Preserve raw custom input including every newline, quote and backslash. No Markdown fences, assignments or surrounding prose in code. The example is not an additional tool declaration."
+	text += "\nCustom tools use the raw string input field, not arguments, arguments.code or arguments.patch. For patch tools, input is the complete raw patch. Do not merely announce the next action: call the declared tool in this response."
 	if !c.parallel {
 		text += "\nInvoke at most one catalog tool in this response."
+	} else {
+		text += "\nUse separate outer run_officejs calls for independent tools in the same response; wait only when the next call depends on the result."
 	}
 	if c.forced != "" {
 		text += "\nThis response must call the catalog tool " + c.forced + "."
@@ -230,15 +235,19 @@ Client tool catalog:
 }
 
 func (c *toolCatalog) convert(native object) (object, error) {
-	if str(native, "type") != "function_call" || (str(native, "name") != "run_officejs" && str(native, "name") != "functions.run_officejs") {
-		return nil, errors.New("BPS 返回了不支持的原生工具；未释放给客户端")
-	}
 	if str(native, "call_id") == "" || str(native, "id") == "" {
 		return nil, errors.New("BPS 工具调用缺少原生身份，不能可靠回放")
 	}
-	inner, diagnostic, err := decodeRelayEnvelope(native)
-	if c.observeRelay != nil {
-		c.observeRelay(diagnostic)
+	var inner object
+	var err error
+	if relayName(str(native, "name")) && str(native, "type") == "function_call" {
+		var diagnostic relayDiagnostic
+		inner, diagnostic, err = decodeRelayEnvelope(native)
+		if c.observeRelay != nil {
+			c.observeRelay(diagnostic)
+		}
+	} else {
+		inner, err = c.directEnvelope(native)
 	}
 	if err != nil {
 		return nil, err
@@ -255,6 +264,7 @@ func (c *toolCatalog) convert(native object) (object, error) {
 		}
 		name = str(inner, "tool")
 	}
+	name = c.originalName(name)
 	spec, ok := c.tools[name]
 	if !ok {
 		return nil, errors.New("BPS 请求了未声明的客户端工具")
@@ -317,8 +327,10 @@ func transformResponse(ctx context.Context, response object, catalog *toolCatalo
 	}
 	next := make([]any, 0, len(output))
 	var calls []struct{ native, client object }
+	var firstCallError error
+	catalog.outputIndices, catalog.skippedTools = nil, 0
 	callIDs, itemIDs := map[string]bool{}, map[string]bool{}
-	for _, v := range output {
+	for index, v := range output {
 		item, ok := v.(object)
 		if !ok {
 			return nil, errors.New("BPS output 项不是对象")
@@ -328,22 +340,31 @@ func transformResponse(ctx context.Context, response object, catalog *toolCatalo
 			if !success {
 				continue
 			}
-			if len(calls) > 0 && !catalog.parallel {
-				return nil, errors.New("BPS 返回多个工具，但客户端禁止并行调用")
-			}
 			if callIDs[str(item, "call_id")] || itemIDs[str(item, "id")] {
 				return nil, errors.New("BPS 返回重复的工具调用身份")
 			}
+			callIDs[str(item, "call_id")], itemIDs[str(item, "id")] = true, true
+			if len(calls) > 0 && !catalog.parallel {
+				catalog.skippedTools++
+				continue
+			}
 			client, err := catalog.convert(item)
 			if err != nil {
-				return nil, err
+				if firstCallError == nil {
+					firstCallError = err
+				}
+				catalog.skippedTools++
+				continue
 			}
-			callIDs[str(item, "call_id")], itemIDs[str(item, "id")] = true, true
 			calls = append(calls, struct{ native, client object }{item, client})
 			next = append(next, client)
 		default:
 			next = append(next, normalizeOutput(item))
 		}
+		catalog.outputIndices = append(catalog.outputIndices, index)
+	}
+	if success && len(calls) == 0 && firstCallError != nil {
+		return nil, firstCallError
 	}
 	if success && len(calls) == 0 && catalog.required {
 		return nil, errors.New("BPS 未遵守必须调用工具的 tool_choice")
@@ -359,8 +380,37 @@ func transformResponse(ctx context.Context, response object, catalog *toolCatalo
 }
 func normalizeOutput(item object) object {
 	n := clone(item)
-	if str(n, "type") == "reasoning" && n["summary"] == nil {
-		n["summary"] = []any{}
+	if str(n, "type") == "reasoning" {
+		text := reasoningText(n["summary"])
+		if text == "" {
+			text = reasoningText(n["content"])
+		}
+		if text == "" && str(n, "encrypted_content") != "" {
+			text = "*Thinking process completed.*"
+		}
+		if text != "" {
+			trimmed := strings.TrimLeft(text, " \r\n\t")
+			if strings.TrimSpace(text) != "" && !strings.HasPrefix(trimmed, "**") && !strings.HasPrefix(trimmed, "#") {
+				text = "**Thinking**\n\n" + text
+			}
+			n["summary"] = []any{object{"type": "summary_text", "text": text}}
+			n["content"] = []any{object{"type": "reasoning_text", "text": text}}
+		} else if n["summary"] == nil {
+			n["summary"] = []any{}
+		}
 	}
 	return n
+}
+
+func reasoningText(value any) string {
+	parts, _ := value.([]any)
+	var text strings.Builder
+	for _, part := range parts {
+		if s, ok := part.(string); ok {
+			text.WriteString(s)
+		} else if p, ok := part.(object); ok {
+			text.WriteString(str(p, "text"))
+		}
+	}
+	return text.String()
 }

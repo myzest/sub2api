@@ -13,7 +13,7 @@ func TestRelayEnvelopeCompatibilityPreservesCustomInputAndNativeReplay(t *testin
 	fenced := "```json\r\n" + string(encoded(inner)) + "\r\n```"
 	nested := object{"name": "functions.run_officejs", "arguments": object{"code": fenced}}
 	twice := object{"name": "run_officejs", "arguments": string(encoded(object{"code": string(encoded(nested))}))}
-	for _, code := range []any{inner, string(encoded(inner)), fenced, twice} {
+	for _, code := range []any{inner, string(encoded(inner)), fenced, twice, "const call = " + string(encoded(inner)) + ";", "```js\n" + string(encoded(inner)) + "\n```", "Relay: " + string(encoded(inner)) + "; sideEffect()"} {
 		s := fixtureServer()
 		source := fixtureRequest()
 		source["tools"] = []any{object{"type": "namespace", "name": "workspace", "tools": []any{object{"type": "custom", "name": "exec"}}}}
@@ -55,13 +55,13 @@ func TestRelayEnvelopeRejectsAmbiguousOrDamagedPayloads(t *testing.T) {
 		code any
 		kind string
 	}{
-		{"trailing object", jsonText + jsonText, "trailing_data"},
-		{"assignment", "const call = " + jsonText, "invalid_json"},
-		{"bad escape", `{"name":"exec_command","arguments":{"cmd":"private\q"}}`, "invalid_escape"},
+		{"trailing object", jsonText + jsonText, "multiple_objects"},
+		{"damaged outer", `{"outer": broken, "inner":` + jsonText + `}`, "invalid_json"},
 		{"truncated", `{"name":`, "incomplete_json"},
 		{"duplicate", `{"name":"exec_command","name":"hidden"}`, "duplicate_key"},
-		{"script fence", "```js\n" + jsonText + "\n```", "invalid_fence"},
-		{"fence with trailer", "```json\n" + jsonText + "\n```\nrun()", "invalid_fence"},
+		{"array in fence", "```json\n[]\n```", "invalid_json"},
+		{"object array in fence", "```json\n[" + jsonText + "]\n```", "not_object"},
+		{"assigned array", "const calls = [" + jsonText + "];", "not_object"},
 		{"array", "[]", "not_object"},
 		{"null", nil, "invalid_type"},
 		{"wrappers", tooDeep, "wrapper_limit"},
@@ -86,5 +86,30 @@ func TestRelayEnvelopeRejectsAmbiguousOrDamagedPayloads(t *testing.T) {
 		if _, err := plan.tools.convert(native); err == nil {
 			t.Fatal("compatibility bypassed tool catalog or schema")
 		}
+	}
+}
+
+func TestRelayInvalidBackslashesPreserveCommandBytes(t *testing.T) {
+	for _, tc := range []struct {
+		code, expected string
+		repairs        int
+	}{
+		{`{"name":"exec_command","arguments":{"cmd":"rg -n \( pattern"}}`, `rg -n \( pattern`, 1},
+		{`const call = {"name":"exec_command","arguments":{"cmd":"rg \d+ C:\work\file"}};`, "rg \\d+ C:\\work\file", 2},
+		{`{"name":"exec_command","arguments":{"cmd":"\u4e2d\n\t\"quoted\"\\end\/"}}`, "中\n\t\"quoted\"\\end/", 0},
+		{`{"name":"exec_command","arguments":{"cmd":"\uZZZZ"}}`, `\uZZZZ`, 1},
+	} {
+		native := nativeItem("unused", nil)
+		native["arguments"] = string(encoded(object{"code": tc.code}))
+		inner, d, err := decodeRelayEnvelope(native)
+		if err != nil || inner["arguments"].(object)["cmd"] != tc.expected || d.Fields[1].BackslashesRepaired != tc.repairs {
+			t.Fatalf("command altered: %+v, diagnostic=%+v, err=%v", inner, d, err)
+		}
+	}
+	// Outer Responses arguments are never repaired. Otherwise one repair
+	// could change the meaning of code before the code-layer decoder sees it.
+	_, d, err := decodeRelayEnvelope(object{"arguments": `{"code":"private\q"}`})
+	if err == nil || d.ErrorKind != "invalid_escape" || d.Fields[0].BackslashesRepaired != 0 {
+		t.Fatal("outer arguments were repaired", d, err)
 	}
 }

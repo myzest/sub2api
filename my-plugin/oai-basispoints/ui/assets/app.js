@@ -45,7 +45,7 @@
     const record=selection.id?selection.record:records[0];
     const result=$(imageOnly?'image-request-diagnostic':'request-diagnostic');
     result.textContent=record?model.requestText(record):imageOnly?'本实例尚未记录到已结束的图片请求。请在 Codex 中识图、生图或改图后刷新；进行中的请求会在结束后显示。':model.requestText(null);
-    result.dataset.state=record&&(record.error||record.http_status>=400||record.attachment_http_status>=400)?'failed':'';
+    result.dataset.state=record&&(record.error||record.omitted_images||record.http_status>=400||record.attachment_http_status>=400)?'failed':'';
     $(imageOnly?'image-diagnostic-runtime':'diagnostic-runtime').textContent=model.diagnosticRuntime(snapshot);
   }
   function renderDiagnostics(reset=false){

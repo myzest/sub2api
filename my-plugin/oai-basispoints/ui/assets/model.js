@@ -18,7 +18,7 @@
     for(const [i,r] of relays.slice(0,16).entries()){
       lines.push(`  调用 ${i+1}：${r.state==='decoded'?'JSON 已解码，后续仍需工具校验':'解析失败'} · 解开重复信封 ${r.unwrapped||0} 层${r.error_kind?` · ${r.error_kind}`:''}`);
       for(const f of (r.fields||[]).slice(0,6)){
-        lines.push(`    层 ${f.layer} · ${f.field} · ${f.type} · ${f.bytes||0} bytes${f.fenced?' · 已去除完整 JSON 围栏':''}${f.error_kind?` · ${f.error_kind}`:''}${f.error_offset?` · 解码内容字节偏移 ${f.error_offset}`:''}`);
+        lines.push(`    层 ${f.layer} · ${f.field} · ${f.type} · ${f.bytes||0} bytes${f.extracted?' · 已提取完整 JSON 对象':f.fenced?' · 已去除 JSON 围栏':''}${f.backslashes_repaired?` · 反斜杠兼容 ${f.backslashes_repaired} 处`:''}${f.error_kind?` · ${f.error_kind}`:''}${f.error_offset?` · ${f.backslashes_repaired?'兼容后':'解码内容'}字节偏移 ${f.error_offset}`:''}`);
       }
     }
     return lines;
@@ -109,7 +109,7 @@
     return `当前插件：${snapshot?.version?`v${snapshot.version}`:'版本未提供'} · 实例：${snapshot?.instance||'尚未连接'}${cleared?` · 上次清空：${new Date(cleared*1000).toLocaleString('zh-CN',{hour12:false})}`:''}`;
   }
   function diagnosticStateText(state) {
-    const states={captured:'已采集脱敏校验信息',empty:'错误响应体为空',no_fields:'错误 JSON 不包含可采集的校验字段',non_json:'错误响应不是 JSON',invalid_json:'错误 JSON 无法解析',too_large:'错误响应超过采集上限',read_error:'错误响应读取失败'};
+    const states={captured:'已采集脱敏校验信息',empty:'错误响应体为空',no_fields:'错误 JSON 不包含可采集的校验字段',non_json:'错误响应不是 JSON',invalid_json:'响应 JSON 无法解析',too_large:'响应超过采集上限',read_error:'响应读取失败',missing_file_id:'附件响应缺少有效文件 ID'};
     return states[state]||state;
   }
   function attachmentText(a) {
@@ -166,7 +166,7 @@
     if(Number.isFinite(r.upstream_request_bytes))lines.push(`${api} 请求体：${r.upstream_request_bytes} bytes`);
     lines.push(`${api} HTTP：${r.http_status||'未收到响应'}`);
     if((imageAPI?r.upstream_started:r.responses_started)===false)lines.push(`${api} 发送阶段：尚未开始`);
-    if(r.client_http_status)lines.push(`客户端 HTTP：${r.client_http_status}${r.error&&r.client_http_status<400?'（请求仍在流内失败，HTTP 200 不代表完成）':''}`);
+    if(r.client_http_status)lines.push(`客户端 HTTP：${r.client_http_status}${r.error&&r.client_http_status<400?(imageAPI?'（响应校验失败，HTTP 200 不代表出图）':'（请求仍在流内失败，HTTP 200 不代表完成）'):''}`);
     if(r.error_source)lines.push(`错误来源：${errorSourceText(r.error_source)}`);
     if(r.content_type)lines.push(`${api} Content-Type：${r.content_type}`);
     if(r.request_id)lines.push(`${api} Request ID：${r.request_id}`);
@@ -177,11 +177,23 @@
     }
     if(r.upstream_error)lines.push(`上游诊断（已脱敏）：${r.upstream_error}`);
     if(r.terminal)lines.push(`结束状态：${valueText(r.terminal)}`);
+    if(r.response_attempts)lines.push(`Responses 发送次数：${r.response_attempts} · 非流式协议中断重试：${r.protocol_retries||0}`);
+    const fallbackNames={refresh_cached_attachments:'清除被拒绝的旧附件缓存并重传',upload_rejected_inline_kind:'将被拒绝的内嵌图片改为附件',omit_rejected_images:'改用明确缺图提示',protocol_interruption:'非流式协议中断重试'};
+    if(r.image_fallbacks?.length)lines.push(`图片容错路径：${r.image_fallbacks.map(x=>fallbackNames[x]||x).join(' → ')}`);
+    for(const attempt of (r.response_retries||[]).slice(0,16)){
+      lines.push(`  第 ${attempt.attempt} 次 Responses：HTTP ${attempt.http_status||'未收到响应'} · ${fallbackNames[attempt.reason]||attempt.reason}${attempt.request_id?` · Request ID：${attempt.request_id}`:''}`);
+      if(attempt.upstream_error)lines.push(`    该次上游诊断（已脱敏）：${attempt.upstream_error}`);
+      else if(attempt.upstream_error_state)lines.push(`    该次错误采集：${diagnosticStateText(attempt.upstream_error_state)}`);
+    }
+    if(r.omitted_images)lines.push(`注意：${r.omitted_images} 张图片未传给模型，已插入缺图提示；本次文本完成不能算作识图成功。`);
+    if(r.keepalives)lines.push(`流式保活：${r.keepalives} 次`);
+    if(r.completion_recovered)lines.push('终态恢复：依据完整 output_item.done 收尾；未伪造 usage，不代表已收到上游 response.completed。');
+    if(r.skipped_tools)lines.push(`未释放的工具调用：${r.skipped_tools}（无法转换或客户端禁止并行时的额外调用；未执行）`);
     lines.push(`输入图片总数：${r.input_images||0}`);
     lines.push(...imageSummaryText(r.images,'客户端图片字段'));
     lines.push(...imageSummaryText(r.upstream_images,'上游图片字段'));
     if(imageAPI){
-      lines.push(`输出图片条目：${r.generated_images||0}（按 b64_json/url 计数；不记录图片正文）`);
+      lines.push(`输出图片条目：${r.generated_images||0}（按宿主可接收的 b64_json 计数；不记录图片正文）`);
       if(r.stage==='completed'&&!r.generated_images)lines.push('Images 返回 JSON 但没有图片条目，不能判定生图成功。');
       if(r.error)lines.push(`错误：${r.error}`);
       lines.push('这是 Codex 生图执行器使用的独立图片接口；文件保存与对话展示由客户端完成。');

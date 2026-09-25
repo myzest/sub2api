@@ -251,7 +251,7 @@ func TestNamespaceCustomAndFunctionSchemaValidation(t *testing.T) {
 func TestInvalidNativeToolsNeverBecomeClientCalls(t *testing.T) {
 	p := mustPlan(t, fixtureServer(), fixtureRequest(), 7)
 	cases := []object{nativeItem("undeclared", object{}), nativeItem("run_officejs", object{}), nativeItem("exec_command", object{"cmd": 1})}
-	for _, code := range []string{`console.log("oops")`, `{"name":"exec_command","arguments":{"cmd":"pwd"}}; sideEffect()`, `{"name":"exec_command","name":"undeclared","arguments":{}}`, `{"name":"exec_command","arguments":{},"extra":"x"}`} {
+	for _, code := range []string{`console.log("oops")`, `{"name":"exec_command","name":"undeclared","arguments":{}}`, `{"name":"exec_command","arguments":{},"extra":"x"}`} {
 		v := nativeItem("x", nil)
 		v["arguments"] = string(encoded(object{"code": code}))
 		cases = append(cases, v)

@@ -1,5 +1,5 @@
 # 依据 excel-codex-bridge 66c41df / 0.4.6 的 Codex provider 设置。
-# 先升级服务器上的插件至 0.1.12，再合并到客户端配置。
+# 先升级服务器上的插件至 0.1.13，再合并到客户端配置。
 # Windows: %USERPROFILE%\.codex\config.toml
 # macOS:   ~/.codex/config.toml
 #

@@ -2,14 +2,14 @@
 
 独立的 Sub2API `.s2plugin` 插件，使用已有 OpenAI OAuth 账号，将选定账号的 Responses 请求转换为 BPS 协议。源码和生成文件都在此目录；不需要二改 Sub2API 主程序。
 
-这是 **0.1.12 Codex 生图与改图接口版本**。依据最新 Excel bridge `66c41df` 接入 BPS `/images/generations` 和 `/images/edits`，复用宿主 OAuth 和账号代理，补齐客户端启用 `image_gen.imagegen` 所需的 provider 请求头说明。生图及改图进入独立图片诊断，保留原有识图、工具回放和清空历史能力。用户已反馈识图可用，本轮新增的生图/改图尚待用户实测。源码依据见 [FIELD_MAPPING.md](FIELD_MAPPING.md)，交付记录见 [VALIDATION.md](VALIDATION.md)。
+这是 **0.1.13 工具、流式与图片容错版本**。依据 Excel bridge `66c41df`（0.4.6），补齐 code 信封的非法反斜杠与外围文本兼容、直接工具转换、并行调用筛选、流式保活及完整项断流收尾、图片缓存刷新与附件回退。继续保留 0.1.12 的独立生图/改图接口。逐项移植与保留边界见 [COMPATIBILITY.md](COMPATIBILITY.md)，字段依据见 [FIELD_MAPPING.md](FIELD_MAPPING.md)，交付及用户验收清单见 [VALIDATION.md](VALIDATION.md)。本轮只编译和打包，未运行功能测试或真实账号请求。
 
 ## 安装
 
 适用宿主：本工作区对应 fork 的插件机制，Plugin Protocol / Transport API / UI Bridge v1，**HostService v2**。清单声明 `>=0.2.8 <0.3.0`，版本号本身不能替代这些接口要求；没有在你的服务器镜像上验收。
 
 1. 将 `dist/trusted-publisher.yaml` 中公钥条目合并到服务器已有配置的 `plugins.trusted_publishers`，保留其他发布者，保持 `allow_unsigned: false`。首次添加公钥后重启 Sub2API。
-2. 在插件管理中导入 `dist/oai-basispoints-0.1.12.s2plugin`。包内包含 Linux amd64、Linux arm64、macOS arm64 运行文件。Windows 上运行 Codex 客户端不要求服务端插件也有 Windows 运行文件。
+2. 在插件管理中导入 `dist/oai-basispoints-0.1.13.s2plugin`。包内包含 Linux amd64、Linux arm64、macOS arm64 运行文件。Windows 上运行 Codex 客户端不要求服务端插件也有 Windows 运行文件。
 3. 启用本插件。如果已有 OpenAI OAuth 出站插件处于启用状态，先停用它：宿主的 `openai.oauth.outbound_transport.v1` 只有一个启用槽位，不能与 GPT Inspector 同时占用。
 4. 将宿主此插件能力的灰度比例设为 **100%**，再通过本插件的账号白名单控制 BPS 路由。比例低于 100% 时，部分选定账号可能根本到不了插件。
 5. 打开插件设置，刷新账号。在保持 BPS 路由关闭的情况下，选一个账号、模型和 effort，点击“保存并探测文本”。图片、工具探测也在这里；每项总共最多等待 120 秒，只有点击探测才发上游请求。
@@ -45,24 +45,26 @@
 | 项目 | 行为 |
 | --- | --- |
 | 模型 | 沿用宿主传入的模型名，要求在插件允许列表中，不自动替换。默认允许 `gpt-5.6-sol/terra/luna` 和 `gpt-6-astra`；是否可用由账号实测决定 |
-| 推理强度 | `low/medium/high/xhigh` 原样传递；`max → xhigh`；`ultra` 需明确开启后原样发送，不回退到 medium |
+| 推理强度 | API 输入 `low/medium/high/xhigh` 支持大小写及首尾空白规范化；`max/x-high/extra-high/extra_high → xhigh`；`ultra` 需明确开启；未知值报错 |
 | 输入 | 普通项保留 type、role、phase、content 和扩展字段；只删除客户端专用 `internal_chat_message_metadata_passthrough`，reasoning、引用和工具回放另行处理 |
 | 流式 | 沿用客户端 stream；普通 SSE 事件、内容和扩展字段转发，工具完成校验后生成客户端工具事件。由于工具事件被重建，sequence_number 重新连续编号 |
 | 工具 | 从顶层 tools 与 input[].additional_tools 提取 function/custom、namespace；支持 allowed_tools；完整 schema / custom format 放入提示，function 参数用 JSON Schema 校验；遵守 parallel_tool_calls:false |
 | 生图 / 改图 | 独立 Images JSON 请求；gpt-image-2、PNG、参考支持的参数。生图发 JSON，改图转 multipart；响应 JSON 交给宿主计费和 Codex 图片执行器 |
-| 原生信封 | 接受 `run_officejs` / `functions.run_officejs` 的单 JSON 对象，可去除完整单一 JSON/无语言围栏、解开最多两层 name/arguments 原生信封；保留重复键、尾随内容、工具目录和 Schema 校验；不修非法转义、不执行 JS |
+| 原生信封 | `run_officejs` / `functions.run_officejs` 的 code 接受对象、JSON 字符串、围栏/赋值/文字内的首个完整对象；字符串内部非法反斜杠按参考加倍，合法转义保留；最多两层重复包装。重复键、多对象、不完整结构、未声明工具或 Schema 不匹配仍拒绝，不执行外围 JS |
 | 工具回放 | KV 命中时校验并恢复原生 item；KV 未命中且有完整调用/结果时，按参考 fallback 转成历史输入；不跨范围读 KV、不执行旧调用 |
-| 终态 | 保留 failed/incomplete、usage、incomplete_details 与扩展字段；缺少终态、非法/重复工具、违反并行限制或原生身份不一致均报错，不伪装 completed |
+| 终态 | 保留 failed/incomplete、usage、incomplete_details。收到真实响应 ID 且所有项均完整 done、索引可靠且末项为非 commentary 消息或工具时，断流可按参考恢复 completed，并标记诊断；不补造 usage。半项、仅 commentary/reasoning 或身份不一致仍失败 |
 | 其他账号 | 按原 URL、Host、headers、body、proxy 转发，使用标准 Go HTTP/TLS；不会复现宿主定制 TLS 指纹 |
 | Token / 错误 | Token 只在内存用于请求；HTTP 错误保留状态码及限流 headers，并附诊断 ID；后台采集受限的脱敏校验信息，不透传原始错误体 |
 
-每个 `run_officejs` 信封只承载一个客户端工具；允许并行时可接收多个信封，先全部校验并保存原生回放记录，再释放客户端事件。客户端显式禁止并行时，多个调用报错。`custom.format` 会完整提供给模型，但插件不实现自定义 grammar 的本地解析器。工具仍由客户端按原来的权限与确认机制执行。
+每个 `run_officejs` 信封只承载一个客户端工具；允许并行时保留所有能通过校验的调用，禁止并行时仅保留第一个有效调用。无法转换的兄弟调用不拖垮有效调用，但全部无效时仍报错；重复 ID、Schema、tool_choice 及 KV 保存约束保留。保留项全部保存后才释放工具事件，后续 SSE 索引随之调整。已声明且类型匹配的直接原生 function/custom 也可转换，原生 update_plan 适配参考参数与结果格式。`custom.format` 完整提供给模型，插件不执行 custom grammar；实际执行由客户端权限控制。
 
-默认 `image_transport=attachment`：将 user message 中 `input_image.image_url` 的 data URL 解码成原图字节，通过同一账号和代理向同源 `/basispoints/api/attachments` 上传 multipart `file`，读取 `openai_file_id` 后改成 `file_id`。保留 detail，缺省补 auto；不压缩图片、不自动降为 low。`passthrough` 可用于对照旧行为。普通 URL、已有 file_id、文件和工具结果中的图片仍透传，不猜测跨通道文件或工具结果图片的上传规则。
+默认 `image_transport=attachment`：user/message 的 `input_image.image_url` data URL 仍直接上传同源 `/basispoints/api/attachments`，使用同账号和代理，保留字节、MIME、detail，缺省 detail 补 auto。工具结果等其他 input 类型中的内嵌图片递归处理，先 inline；Responses 明确返回 400/422 后，按类型改用附件并在进程内记住。普通 URL、已有 file_id 和文件继续透传；不取回跨通道文件。`passthrough` 完全关闭这套上传和图片回退，保留原样对照。
 
-0.1.8 明确映射 `image/jpeg → image.jpg`、`image/png → image.png`、`image/gif → image.gif`、`image/webp → image.webp`；兼容 `image/jpg` 并将其 MIME 规范为 `image/jpeg`。不再采用 `mime.ExtensionsByType` 的首项，避免宿主 MIME 数据库选出 `.jfif` / `.jpe`。附件模式中的其他 MIME 在上传前明确报错，不伪装为受支持格式。Responses 图片项仍只改为 file_id 并补缺省 detail，不添加未经参考验证的 MIME/filename 字段。
+附件明确映射 `image/jpeg → image.jpg`、`image/png → image.png`、`image/gif → image.gif`、`image/webp → image.webp`，兼容 `image/jpg`。不使用可能选出 `.jfif` / `.jpe` 的 MIME 数据库首项，不把不支持的格式伪装为 PNG。Responses 图片项只改 file_id 并补缺省 detail，不添加未经参考验证的 MIME/filename 字段。
 
-附件缓存按账号、凭据、端点、上传格式版本、MIME、扩展名和图片摘要隔离，最多 512 条，仅存摘要与文件 ID。仅复用已成功上传的结果；同时首次上传同图的请求各自上传，避免一个请求取消使其他请求失败。缓存只在当前进程，升级启动新实例就会清空，不存在跨进程持久化的附件 ID 缓存。上游附件寿命尚未验证，不自动重试或静默删除图片。附件非 2xx 响应即使正文读取失败，也保留 HTTP 状态和限流/追踪响应头。顶层文本和压缩项仍保留原类型与位置。
+附件缓存仍按账号、凭据、端点、格式和图片摘要隔离，最多 512 条，进程重启清空。400/422 优先清除本次使用的旧缓存并重传；本请求新上传的图片不因再次拒绝重复上传。之后逐类将 inline 改附件，仍被拒则用明确 `[image content omitted: ...]` 占位。无法解码/上传也采用占位；一轮上传网络不可用后跳过后续新上传，但仍可用成功缓存。重试受请求期限和单调次数边界限制，保留原始 turn/task/iteration；401/403/429/5xx 不触发图片回退。诊断显示省略数量，省略任何图片时不能当作识图通过；主动图片路由探测会判定失败。
+
+流式收到 created/in_progress 后，静默 15 秒发送一次 in_progress 保活，不新增上游请求，取消时关闭读取器。最后一个完整 SSE block 即使缺少空行也会处理；已收到终态后的尾部断线不推翻结果。非流式只对可识别的 HTTP EOF/帧中断重试一次，JSON/信封/Schema 错误、普通超时不自动重试；已经开始的流式响应不重发。独立 Images 生图/改图不采用这些 Responses 重试规则。
 
 工具目录从顶层和 additional_tools 提取 function/custom 和 namespace 下的对应叶子，其他工具声明与参考项目一样忽略。additional_tools 在原位置转成 developer 工具目录提示，不作为 BPS 原生工具声明发送；相同叶子定义去重，冲突报错。保留 custom exec 的 description、format 和调用时的原始 input。此适配不代表原生 image_generation、搜索、计算机、MCP 或 tool_search 已可用；独立 namespace group tool_choice 尚不支持。不增加独立 `/responses/compact`、`/input_tokens`、后台任务或旧响应拉取能力。`previous_response_id`、`conversation`、`background:true` 明确报错。
 
@@ -104,13 +106,13 @@
 
 图片摘要分别显示转换前后位置、来源（data URL、file_id、远程 URL 或对象等）、detail、MIME 与编码长度，最多 16 项；不保留图片内容、URL 或 file_id 值。附件诊断展示上传/复用数量与独立 HTTP；Responses 展示 HTTP、Request ID、请求大小和受限错误字段。上游错误体最多读取 64 KiB，仅提取 message/code/type/param/detail 中校验字段，去除 rejected input/ctx、已知请求值、凭据、URL 和长不透明字符串；非 JSON、过大或读取失败只记录原因，不保存完整错误体。客户端错误附本地诊断 ID，便于关联。工具诊断仍只保留类型、有界名称和数量。探测结果另外保留插件生成的图片和校验值。
 
-定位拖图 400 时，先运行“保存并探测图片路由”，再在 Codex 新任务拖入图片，点击“刷新图片诊断”选择对应客户端记录。优先比较附件是否成功、转换后的图片来源、detail，以及上游 error.param/校验路径。不要仅凭 400 判定 original、某模型或图片能力不受支持；本版没有自动改 detail、删图或重试。
+定位拖图问题时，先运行“保存并探测图片路由”，再发送真实图片并刷新对应记录。诊断保留每次回退的 HTTP、Request ID 和脱敏原因，以及最终图片字段与省略数量；不能仅凭最终 HTTP 200 判定识图成功。上传/复用是跨尝试的处理次数，不是不同图片的数量。detail 不自动修改，重试不等于确认了某个字段或模型不受支持。
 
 0.1.8 附件摘要另显示最多 16 张图的上游位置、插件生成的文件名、MIME、原图字节数和上传/复用状态，不记录原始文件名。旧任务诊断增加历史工具项计数与 ID 分类（插件/外部/缺失/异常），不显示真实 call_id 或参数。升级后首次发同图应显示新上传以及 `image.jpg / image/jpeg`；如果仍报 `got none`，该记录可区分文件名修正是否生效，不能仅凭本次代码修正宣称远端问题已解决。
 
 0.1.9 增加附件上传尝试次数与逐图 HTTP 状态。汇总 HTTP、Content-Type、Request ID 和错误采集状态仅表示最近一次上传尝试：前图成功、后图取消或连接失败时不会沿用之前的 HTTP 200；有缓存命中也不会掩盖后续上传失败。仅命中缓存时显示“缓存复用，无上传请求”。附件非 2xx 与 Responses 使用同一套受限脱敏规则；缺少错误详情时显示读取失败、超限、非 JSON 等采集原因。
 
-0.1.10 的“工具信封诊断”记录类型、字节数、JSON 错误类别/偏移、围栏处理和解包层数；偏移以当前层去除外围空白/围栏后交给解码器的内容为基准，不记录参数正文。解析成功仍要通过目录、Schema、tool_choice 和回放保存校验。“回放范围指纹”可用于对照同一任务各轮范围是否变化，账号单独显示；KV 未命中本身不能证明过期。“Responses HTTP”是上游状态，“客户端 HTTP”是已发给宿主的状态；流式 200 后仍可能发生工具转换错误。
+“工具信封诊断”记录类型、原始字节数、JSON 错误类别/偏移、对象提取、反斜杠处理数量和解包层数；偏移基于当前层提取/兼容后实际解码的文本，不是原始请求偏移，不记录参数正文。解析成功仍要通过目录、Schema、tool_choice 和回放保存校验。“回放范围指纹”用于对照各轮范围，KV 未命中本身不能证明过期。Responses HTTP 与客户端 HTTP 分别表示上游和已发送给宿主的状态；新增重试记录、保活、恢复终态及跳过工具计数。
 
 模型白名单拒绝使用 bps_model_not_allowed，并标明 plugin_local_config、responses_started=false。gpt-6-sol 与 gpt-5.6-sol 不自动互换，也不因本次修复加入默认列表。其他错误分别标识本地请求、历史恢复、图片附件、上游 HTTP、信封解析、响应转换及取消/超时。
 
@@ -130,7 +132,7 @@
 | Skills | 保留 instructions 和工具目录，提示通过工具读取 SKILL.md；发现、安装和执行环境仍归客户端 |
 | Subagent | 若客户端将其声明为上述 callable 类型，可按同样信封桥接；是否启用由客户端配置及当前用户授权决定 |
 | MCP / Apps | 以 function/custom 暴露时可进入目录；原生 mcp、tool_search 等服务端工具尚未映射 |
-| 输入图片 / 识图 | 用户消息 data URL 附件上传；用户已反馈识图成功，普通 URL/file_id 及工具输出图片仍由上游决定是否接受 |
+| 输入图片 / 识图 | 用户消息附件上传；工具结果内嵌图片的 inline/附件回退；旧缓存重传与显式缺图提示。用户曾反馈基础识图成功，本版新增容错待实测 |
 | 生成 / 编辑图片 | 0.1.12 适配客户端 image_gen.imagegen 使用的独立 Images 接口；需配置 provider 头并开启宿主分组生图。Responses hosted image_generation 未映射 |
 | 原生搜索、计算机、独立 compact/input_tokens、服务端会话 | 尚未接入，不能宣称完整恢复 |
 
@@ -140,7 +142,7 @@
 
 最新 [Excel bridge 0.4.6](https://github.com/Kaixxrua/excel-codex-bridge/tree/66c41df941fb1a963801964c75ff24b4a19e93f2) 补齐了此前固定参考版本没有的实现：Codex 客户端通过 provider 的 `x-openai-actor-authorization` 头启用本地 `image_gen.imagegen`，执行器向 provider 的 `/images/generations`、`/images/edits` 发送独立请求。这与 Responses 的 hosted `image_generation` 是两条不同链路。0.1.11 的“尚未接入”结论仅代表当时版本；0.1.12 已按新参考移植独立接口。
 
-1. 先在服务器停用旧版、导入并启用 0.1.12，保持 BPS 账号白名单。账号所属分组必须允许生图，并能将 `gpt-image-2` 调度到选中的 BPS OAuth 账号；不要把这个图片模型映射成文字模型。插件“允许的模型”是 Responses 文字模型列表，无需为生图追加 `gpt-image-2`。宿主账号的图片工具策略应选择“继承/允许”，不能为“拦截”。
+1. 先在服务器停用旧版、导入并启用 0.1.13，保持 BPS 账号白名单。账号所属分组必须允许生图，并能将 `gpt-image-2` 调度到选中的 BPS OAuth 账号；不要把这个图片模型映射成文字模型。插件“允许的模型”是 Responses 文字模型列表，无需为生图追加 `gpt-image-2`。宿主账号的图片工具策略应选择“继承/允许”，不能为“拦截”。
 2. 修改发起任务的那台电脑的 Codex provider 配置。Windows 为 `%USERPROFILE%\.codex\config.toml`，macOS 为 `~/.codex/config.toml`。在当前 provider 表中合并下面一行；`custom` 应与文件中的 `model_provider` 值一致，保留原 `base_url`、鉴权及其他请求头，不要重复创建同名表或重复键。完整说明见 [codex-imagegen.example.toml](codex-imagegen.example.toml)。
 
    ```toml

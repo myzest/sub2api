@@ -100,6 +100,9 @@ func (s *Server) probeImageRoute(ctx context.Context, p *Probe, cfg Config, h ht
 	if captured == nil {
 		return errors.New("图片路由探测未取得本请求的路由诊断，无法确认已走 BPS")
 	}
+	if captured.OmittedImages > 0 {
+		return errors.New("图片已按参考策略省略，本次只完成文本降级，不能判为识图探测通过；请查看图片诊断")
+	}
 	p.ResponseID, p.ReturnedModel = redactProbeText(str(response, "id"), h, p.ImagePreview), redactProbeText(str(response, "model"), h, p.ImagePreview)
 	p.Usage = response["usage"]
 	if str(response, "status") != "completed" {

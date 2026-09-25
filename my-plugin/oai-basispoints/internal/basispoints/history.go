@@ -68,6 +68,14 @@ func historicalTransportCall(item object) (object, error) {
 			return nil, errors.New("旧 function 工具历史需要有效 JSON 对象 arguments")
 		}
 		inner["arguments"] = args
+		if name == "update_plan" {
+			native := clone(item)
+			native["arguments"] = string(encoded(restoreNativePlan(args)))
+			if str(native, "id") == "" {
+				native["id"] = functionItemID(handle)
+			}
+			return native, nil
+		}
 		// The reference also accepts a native relay already present in the
 		// supplied history. Preserve all its original fields and state.
 		if name == "run_officejs" || name == "functions.run_officejs" {

@@ -150,6 +150,10 @@ func inlineImageBytes(value string) (string, []byte, error) {
 }
 
 func (s *Server) uploadInputImages(ctx context.Context, plan *requestPlan, headers http.Header, proxy string) (*attachmentReport, error) {
+	return s.uploadInputImagesAvailable(ctx, plan, headers, proxy, false)
+}
+
+func (s *Server) uploadInputImagesAvailable(ctx context.Context, plan *requestPlan, headers http.Header, proxy string, unavailable bool) (*attachmentReport, error) {
 	report := &attachmentReport{}
 	base, err := url.Parse(s.responsesURL)
 	if err != nil || base.Host == "" || base.User != nil || base.RawQuery != "" || base.Fragment != "" || (base.Scheme != "https" && base.Scheme != "http") {
@@ -189,6 +193,9 @@ func (s *Server) uploadInputImages(ctx context.Context, plan *requestPlan, heade
 			// also cleared when the new plugin process starts on upgrade.
 			key := digest([]any{attachmentWireVersion, endpoint, plan.store.accountID, headers.Get("Chatgpt-Account-Id"), headers.Get("Authorization"), mediaType, extension, digest(data)})
 			id, reused, err := s.attachments.obtain(key, func() (string, error) {
+				if unavailable {
+					return "", &attachmentError{code: "bps_attachment_unavailable", text: "当前请求的附件连接不可用"}
+				}
 				return s.uploadImage(ctx, endpoint, headers, proxy, mediaType, name, data, dataURL, report)
 			})
 			if !reused {
@@ -281,12 +288,21 @@ func (s *Server) uploadImage(ctx context.Context, endpoint string, headers http.
 		return "", &attachmentError{status: resp.StatusCode, code: "bps_attachment_http", text: fmt.Sprintf("BPS 图片上传返回 HTTP %d；尚未发送识图请求", resp.StatusCode), sent: true, headers: responseHeaders(resp.Header)}
 	}
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, (64<<10)+1))
-	if err != nil || len(raw) > 64<<10 {
-		return "", &attachmentError{code: "bps_attachment_response", text: "图片上传响应读取失败或超过 64 KiB", sent: true}
+	if err != nil {
+		report.DiagnosticState = "read_error"
+		return "", &attachmentError{code: "bps_attachment_transport", text: "图片上传响应传输中断", sent: true}
+	}
+	if len(raw) > 64<<10 {
+		report.DiagnosticState = "too_large"
+		return "", &attachmentError{code: "bps_attachment_response", text: "图片上传响应超过 64 KiB", sent: true}
 	}
 	value, parseErr := decodeObject(raw)
 	id := strings.TrimSpace(str(value, "openai_file_id"))
 	if parseErr != nil || id == "" || len(id) > 512 || strings.ContainsAny(id, "\r\n") {
+		report.DiagnosticState = "missing_file_id"
+		if parseErr != nil {
+			report.DiagnosticState = "invalid_json"
+		}
 		return "", &attachmentError{code: "bps_attachment_response", text: "图片上传响应没有有效的 openai_file_id", sent: true}
 	}
 	return id, nil
