@@ -2,14 +2,14 @@
 
 独立的 Sub2API `.s2plugin` 插件，使用已有 OpenAI OAuth 账号，将选定账号的 Responses 请求转换为 BPS 协议。源码和生成文件都在此目录；不需要二改 Sub2API 主程序。
 
-这是 **0.1.20 探测超时与流进度诊断版本**。主动探测不再被额外截断到 120 秒，改为遵循已保存的请求超时；身份获取、附件上传和工具三轮共享一个有限总预算。增加 SSE 事件数量、最近事件类型/时间及已确认终态，超时不再只显示裸 context deadline exceeded，不改变模型、effort、协议或自动重试策略。保留 0.1.19 的旧会话加密消息透传、不透明图片边界及探测来源区分，继续保留 encrypted_function_args: [] 新委派修复。本版仅做静态、编译与归档检查，不执行功能测试、真实请求或部署；用户在本版部署前第二次探测已于 27.1 秒完成，不能把该成功归因于本版改动。入口区别见 [HOST_INTEGRATION.md](HOST_INTEGRATION.md)。
+这是 **0.1.21 WebSocket 桥接保活版本**。流式 Responses 改为按独立 15 秒周期发出 `keepalive`，不再被持续工具增量或进度元数据推迟，也不等待 response ID。复用当前宿主的 WebSocket HTTP Bridge 心跳放行逻辑，宿主源码不改；客户端必须实际使用 WebSocket，普通 HTTP/SSE 首输出前仍可能缓存心跳。新增插件已处理上游、缓存、工具暂不转发及成功写入宿主的计数/时间，不把写入成功说成客户端已收到。保留 0.1.20 的探测总预算、旧会话透传、工具校验及重试规则。只做静态、编译与归档检查，真实链路由用户验收，不能据此承诺所有断流已修复。配置和验收见 [WEBSOCKET_KEEPALIVE.md](WEBSOCKET_KEEPALIVE.md)，入口区别见 [HOST_INTEGRATION.md](HOST_INTEGRATION.md)。
 
 ## 安装
 
 适用宿主：本工作区对应 fork 的插件机制，Plugin Protocol / Transport API / UI Bridge v1，**HostService v2**。清单声明 `>=0.2.8 <0.3.0`，版本号本身不能替代这些接口要求；没有在你的服务器镜像上验收。
 
 1. 将 `dist/trusted-publisher.yaml` 中公钥条目合并到服务器已有配置的 `plugins.trusted_publishers`，保留其他发布者，保持 `allow_unsigned: false`。首次添加公钥后重启 Sub2API。
-2. 在插件管理中导入 `dist/oai-basispoints-0.1.20.s2plugin`。包内包含 Linux amd64、Linux arm64、macOS arm64 运行文件。Windows 上运行 Codex 客户端不要求服务端插件也有 Windows 运行文件。
+2. 在插件管理中导入 `dist/oai-basispoints-0.1.21.s2plugin`。包内包含 Linux amd64、Linux arm64、macOS arm64 运行文件。Windows 上运行 Codex 客户端不要求服务端插件也有 Windows 运行文件。
 3. 启用本插件。如果已有 OpenAI OAuth 出站插件处于启用状态，先停用它：宿主的 `openai.oauth.outbound_transport.v1` 只有一个启用槽位，不能与 GPT Inspector 同时占用。
 4. 将宿主此插件能力的灰度比例设为 **100%**，再通过本插件的账号白名单控制 BPS 路由。比例低于 100% 时，部分选定账号可能根本到不了插件。
 5. 打开插件设置，刷新账号。在保持 BPS 路由关闭的情况下，选一个账号、模型和 effort，点击“保存并探测文本”。图片、工具探测也在这里；每项总时间预算遵循已保存的 `timeout_seconds`（默认 600 秒，范围 10–3600 秒），包含身份获取、上传和全部轮次，工具三轮不分别重新计时，不再额外截断到 120 秒。只有点击探测才发上游请求。
@@ -64,7 +64,7 @@
 
 附件缓存仍按账号、凭据、端点、格式和图片摘要隔离，最多 512 条，进程重启清空。400/422 优先清除本次使用的旧缓存并重传；本请求新上传的图片不因再次拒绝重复上传。之后逐类将 inline 改附件，仍被拒则用明确 `[image content omitted: ...]` 占位。无法解码/上传也采用占位；一轮上传网络不可用后跳过后续新上传，但仍可用成功缓存。重试受请求期限和单调次数边界限制，保留原始 turn/task/iteration；401/403/429/5xx 不触发图片回退。诊断显示省略数量，省略任何图片时不能当作识图通过；主动图片路由探测会判定失败。
 
-流式收到 created/in_progress 后，静默 15 秒发送一次 in_progress 保活，不新增上游请求，取消时关闭读取器。最后一个完整 SSE block 即使缺少空行也会处理；已收到终态后的尾部断线不推翻结果。非流式只对可识别的 HTTP EOF/帧中断重试一次，JSON/信封/Schema 错误、普通超时不自动重试；已经开始的流式响应不重发。独立 Images 生图/改图不采用这些 Responses 重试规则。
+流式 Responses 开始读取上游 SSE 后，按独立 15 秒周期发送 `event: keepalive` / `data: {"type":"keepalive"}`，不增加上游请求；真实事件到达、成功写出的元数据或被暂存的工具参数都不会重置此周期。心跳不含 response ID、output、usage 或 sequence_number，不释放未校验工具，取消、写出失败或终态后停止并关闭读端。当前宿主只有 WebSocket HTTP Bridge 明确在首输出前放行此心跳；普通 HTTP/SSE 仍可能缓存，客户端需要按专门说明启用并验证 WebSocket。最后一个完整 SSE block 即使缺少空行也会处理；已收到终态后的尾部断线不推翻结果。非流式只对可识别的 HTTP EOF/帧中断重试一次，JSON/信封/Schema 错误、普通超时不自动重试；已经开始的流式响应不重发。独立 Images 生图/改图不采用这些 Responses 心跳和重试规则。
 
 工具目录从顶层和 additional_tools 提取 function/custom 和 namespace 下的对应叶子，其他工具声明与参考项目一样忽略。additional_tools 在原位置转成 developer 工具目录提示，不作为 BPS 原生工具声明发送；相同叶子定义去重，冲突报错。保留 custom exec 的 description、format 和调用时的原始 input。此适配不代表原生 image_generation、搜索、计算机、MCP 或 tool_search 已可用；独立 namespace group tool_choice 尚不支持。不增加独立 `/responses/compact`、`/input_tokens`、后台任务或旧响应拉取能力。`previous_response_id`、`conversation`、`background:true` 明确报错。
 
@@ -175,7 +175,7 @@
 
 最新 [Excel bridge 0.4.6](https://github.com/Kaixxrua/excel-codex-bridge/tree/66c41df941fb1a963801964c75ff24b4a19e93f2) 补齐了此前固定参考版本没有的实现：Codex 客户端通过 provider 的 `x-openai-actor-authorization` 头启用本地 `image_gen.imagegen`，执行器向 provider 的 `/images/generations`、`/images/edits` 发送独立请求。这与 Responses 的 hosted `image_generation` 是两条不同链路。0.1.11 的“尚未接入”结论仅代表当时版本；0.1.12 已按新参考移植独立接口。
 
-1. 先在服务器停用旧版、导入并启用 0.1.20，保持 BPS 账号白名单。账号所属分组必须允许生图，并能将 `gpt-image-2` 调度到选中的 BPS OAuth 账号；不要把这个图片模型映射成文字模型。插件“允许的模型”是 Responses 文字模型列表，无需为生图追加 `gpt-image-2`。宿主账号的图片工具策略应选择“继承/允许”，不能为“拦截”。
+1. 先在服务器停用旧版、导入并启用 0.1.21，保持 BPS 账号白名单。账号所属分组必须允许生图，并能将 `gpt-image-2` 调度到选中的 BPS OAuth 账号；不要把这个图片模型映射成文字模型。插件“允许的模型”是 Responses 文字模型列表，无需为生图追加 `gpt-image-2`。宿主账号的图片工具策略应选择“继承/允许”，不能为“拦截”。
 2. 修改发起任务的那台电脑的 Codex provider 配置。Windows 为 `%USERPROFILE%\.codex\config.toml`，macOS 为 `~/.codex/config.toml`。在当前 provider 表中合并下面一行；`custom` 应与文件中的 `model_provider` 值一致，保留原 `base_url`、鉴权及其他请求头，不要重复创建同名表或重复键。完整说明见 [codex-imagegen.example.toml](codex-imagegen.example.toml)。
 
    ```toml

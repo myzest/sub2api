@@ -65,6 +65,7 @@ type requestDiagnostic struct {
 	ResponseRetries        []responseRetryDiagnostic `json:"response_retries,omitempty"`
 	OmittedImages          int                       `json:"omitted_images,omitempty"`
 	Keepalives             int                       `json:"keepalives,omitempty"`
+	StreamDelivery         *streamDeliveryDiagnostic `json:"stream_delivery,omitempty"`
 	CompletionRecovered    bool                      `json:"completion_recovered,omitempty"`
 	SkippedTools           int                       `json:"skipped_tools,omitempty"`
 	ClientHTTPStatus       int                       `json:"client_http_status,omitempty"`

@@ -41,7 +41,7 @@
 | --- | --- | --- |
 | 原生工具事件暂存 | 不转发未经校验的参数增量；终态转换并保存后发 added/delta/done | sse.go |
 | 跳过调用后的输出顺序 | 为后续文本/推理保留事件，按最终 output 调整 output_index；统一重编号 sequence_number | sse.go |
-| `_with_ticks` 静默保活 | 有真实响应 ID 后，静默 15 秒发 in_progress；不发第二个上游请求，取消/结束后停止并关闭读端 | stream_compat.go |
+| `_with_ticks` 保活与当前宿主适配 | 0.1.21 改为独立 15 秒周期的无 ID/无序号 keepalive；按本地宿主 WS HTTP Bridge 的特殊放行逻辑适配，不再等待真实响应 ID，也不因收到工具增量或发出元数据延期。普通 HTTP/SSE 首输出前仍可能缓存；不发第二个上游请求，取消/结束/写入失败后停止并关闭读端 | stream_compat.go、stream_delivery.go、WEBSOCKET_KEEPALIVE.md |
 | `completion_from_finished_items` | 缺终态但全部 seen 项 done、索引连续可靠、没有未完成增量时，允许从非 commentary 消息或工具收尾；必须有真实 response ID。半项、仅 commentary/reasoning、重复或缺索引不恢复 | stream_compat.go |
 | 恢复完成的计费边界 | 诊断单独记录 completion_recovered；上游没有返回的 usage 不填造，不能声称已收到真实 completed | stream_compat.go、diagnostics.go |
 | 无空行的末 SSE block | 完整 JSON 末块仍处理；半个 JSON 不据此收尾。实际读到的字节数限制仍生效，包括 CRLF | sse.go |

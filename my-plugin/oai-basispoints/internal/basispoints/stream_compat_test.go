@@ -90,7 +90,7 @@ func TestKeepaliveStopsOnCancellationAndDoesNotStartRequestAgain(t *testing.T) {
 		_, _ = io.WriteString(writer, eventBytes(object{"type": "response.created", "response": object{"id": "resp_fixture", "status": "in_progress", "output": []any{}}}))
 	}()
 	r := newRelay(ctx, mustPlan(t, fixtureServer(), fixtureRequest(), 7), func(raw []byte) error {
-		if strings.Contains(string(raw), "event: response.in_progress") {
+		if strings.Contains(string(raw), "event: keepalive") {
 			cancel()
 		}
 		return nil

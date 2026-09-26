@@ -226,7 +226,18 @@
       else if(attempt.upstream_error_state)lines.push(`    该次错误采集：${diagnosticStateText(attempt.upstream_error_state)}`);
     }
     if(r.omitted_images)lines.push(`注意：${r.omitted_images} 张图片未传给模型，已插入缺图提示；本次文本完成不能算作识图成功。`);
-    if(r.keepalives)lines.push(`流式保活：${r.keepalives} 次`);
+    if(r.stream_delivery){
+      const s=r.stream_delivery;
+      if(s.keepalive_mode==='keepalive')lines.push(`插件保活：keepalive · 独立周期 ${s.keepalive_interval_ms/1000} 秒 · 成功写入宿主 ${r.keepalives||0} 次`);
+      else lines.push('插件保活：本次为聚合响应，不发送下游 SSE 心跳。');
+      lines.push(`流事件（插件观测）：已处理上游 ${s.upstream_events||0} 项 · 累计缓存 ${s.buffered_events||0} 项 · 原生工具未直接转发 ${s.suppressed_tool_events||0} 项 · 结束时待处理缓存 ${s.pending_events||0} 项`);
+      lines.push(`插件→宿主：成功写出 ${s.sent_events||0} 个 JSON 事件（含保活，不含 [DONE]）`);
+      for(const [key,label] of [['first_upstream_at_ms','首个上游事件'],['last_upstream_at_ms','最后上游事件'],['first_sent_at_ms','首次成功写出'],['last_sent_at_ms','最后成功写出']]){
+        if(Number.isFinite(s[key])&&s[key]>0)lines.push(`  ${label}：${new Date(s[key]).toLocaleString('zh-CN',{hour12:false})}`);
+      }
+      if(s.keepalive_mode==='keepalive')lines.push(`最大已观测写出静默：${((s.max_send_gap_ms||0)/1000).toFixed(3)} 秒（含首包等待及结束前静默；不代表客户端收包间隔）`);
+      lines.push('这些计数仅证明插件向宿主写出成功，不证明 WebSocket 握手、宿主已刷新或 Codex 已收到。普通 HTTP/SSE 首输出前仍可能缓存心跳；缓存与工具重建使各项计数不必相等。');
+    }else if(r.keepalives)lines.push(`流式保活：${r.keepalives} 次（旧记录未提供保活类型与下游观测）`);
     if(r.completion_recovered)lines.push('终态恢复：依据完整 output_item.done 收尾；未伪造 usage，不代表已收到上游 response.completed。');
     if(r.skipped_tools)lines.push(`未释放的工具调用：${r.skipped_tools}（响应失败/未完成、无法转换或客户端禁止并行时未释放；未执行）`);
     lines.push(`输入图片总数：${r.input_images||0}`);

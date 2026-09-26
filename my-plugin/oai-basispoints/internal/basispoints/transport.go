@@ -300,7 +300,6 @@ func (s *Server) Forward(stream pluginv1.TransportPlugin_ForwardServer) (result 
 			return failure
 		}
 		consumeErr := relay.consume(resp)
-		d.Keepalives += relay.keepalives
 		d.CompletionRecovered = relay.recovered
 		// A verified response with an invalid relay is a protocol failure, not
 		// a broken HTTP connection. Keep the stream valid and retain its ID.
@@ -311,6 +310,8 @@ func (s *Server) Forward(stream pluginv1.TransportPlugin_ForwardServer) (result 
 			d.Error = "bps_tool_envelope_invalid: " + limitCharacters(consumeErr.Error(), 1000)
 			consumeErr = relay.failEnvelope(d.ID)
 		}
+		d.Keepalives += relay.keepalives
+		d.StreamDelivery = relay.deliverySnapshot()
 		d.SkippedTools = plan.tools.skippedTools
 		if err := consumeErr; err != nil {
 			if !plan.stream && d.ProtocolRetries == 0 && ctx.Err() == nil && protocolInterruption(err) {

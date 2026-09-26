@@ -5,6 +5,19 @@ const vm=require('node:vm');
 const crypto=require('node:crypto').webcrypto;
 const model=require('../ui/assets/model.js');
 
+test('stream delivery diagnostics distinguish host writes from client receipt',()=>{
+  const text=model.requestText({keepalives:2,stream_delivery:{keepalive_mode:'keepalive',keepalive_interval_ms:15000,upstream_events:500,buffered_events:3,suppressed_tool_events:400,pending_events:1,sent_events:4,first_upstream_at_ms:1750000000000,last_upstream_at_ms:1750000030000,first_sent_at_ms:1750000000000,last_sent_at_ms:1750000030000,max_send_gap_ms:15001}});
+  assert.match(text,/独立周期 15 秒/);assert.match(text,/成功写入宿主 2 次/);
+  assert.match(text,/已处理上游 500 项/);assert.match(text,/累计缓存 3 项/);
+  assert.match(text,/成功写出 4 个 JSON 事件/);assert.match(text,/15.001 秒/);
+  assert.match(text,/不证明 WebSocket 握手、宿主已刷新或 Codex 已收到/);
+  assert.match(text,/普通 HTTP\/SSE 首输出前仍可能缓存心跳/);
+  assert.match(model.requestText({keepalives:1}),/旧记录未提供保活类型/);
+  const aggregate=model.requestText({stream_delivery:{keepalive_mode:'none',upstream_events:3,sent_events:0,max_send_gap_ms:120000}});
+  assert.match(aggregate,/聚合响应，不发送下游 SSE 心跳/);
+  assert.doesNotMatch(aggregate,/最大已观测写出静默/);
+});
+
 test('agent diagnostics distinguish explicit plaintext from missing encryption metadata',()=>{
   const parent=model.requestText({output_tool_calls:1,output_tools:[{type:'function_call',name:'collaboration.spawn_agent',argument_encryption:'plaintext'}]});
   assert.match(parent,/明确明文（encrypted_function_args: \[\]）/);

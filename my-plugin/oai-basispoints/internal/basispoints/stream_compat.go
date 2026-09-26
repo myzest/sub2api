@@ -30,9 +30,14 @@ func (r *relay) consumeStream(response *http.Response) error {
 }
 
 func (r *relay) consumeStreamEvery(response *http.Response, interval time.Duration) error {
+	if interval <= 0 {
+		return errors.New("SSE 保活间隔必须大于零")
+	}
+	r.startDelivery(interval)
 	type readResult struct {
-		event object
-		err   error
+		event  object
+		err    error
+		readAt time.Time
 	}
 	ctx, cancel := context.WithCancel(r.ctx)
 	defer cancel()
@@ -41,7 +46,7 @@ func (r *relay) consumeStreamEvery(response *http.Response, interval time.Durati
 	go func() {
 		err := readSSE(response.Body, func(e object) (bool, error) {
 			select {
-			case events <- readResult{event: e}:
+			case events <- readResult{event: e, readAt: time.Now()}:
 				switch str(e, "type") {
 				case "response.completed", "response.failed", "response.incomplete", "error", "response.error":
 					return true, nil
@@ -63,22 +68,29 @@ func (r *relay) consumeStreamEvery(response *http.Response, interval time.Durati
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-timer.C:
-			if str(r.started, "id") != "" && r.emit != nil {
-				progress := clone(r.started)
-				progress["status"], progress["output"] = "in_progress", []any{}
-				if err := r.send(object{"type": "response.in_progress", "response": progress}); err != nil {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			if r.emit != nil {
+				// The host WS HTTP bridge relays keepalive before semantic output
+				// without committing the attempt or releasing staged lifecycle events.
+				// It needs neither a response ID nor a Responses sequence number.
+				if err := r.writeEvent(object{"type": "keepalive"}); err != nil {
 					return err
 				}
 				r.keepalives++
 			}
 			timer.Reset(interval)
 		case next := <-events:
-			timer.Reset(interval)
 			if next.event != nil {
+				r.recordUpstream(next.readAt)
 				done, err := r.event(next.event)
 				if err != nil || done {
 					return err
 				}
+				// Keep an independent heartbeat deadline. Even successfully written
+				// created/in_progress events may still be staged by the host. Neither
+				// upstream activity nor downstream metadata can postpone this timer.
 				continue
 			}
 			if ctx.Err() != nil {

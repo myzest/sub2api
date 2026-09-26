@@ -1,0 +1,10 @@
+# 0.1.21：先在服务器安装新版插件，再合并到实际生效的客户端配置。
+# 当前 Mac：/Users/zest/.codex/config.toml
+# Windows 默认位置：%USERPROFILE%\.codex\config.toml
+# 若设置了 CODEX_HOME，使用其 config.toml；配置管理器也可能覆盖该文件。
+# custom 必须与现有 model_provider 一致。只向已有段补字段，不重复创建表。
+# 保留原 base_url、鉴权、模型、effort 和已有图片 http_headers。
+# 这两行属于 provider 本身，不能加在 http_headers 子表下面。
+[model_providers.custom]
+wire_api = "responses"
+supports_websockets = true

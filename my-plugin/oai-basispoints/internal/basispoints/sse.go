@@ -27,6 +27,7 @@ type relay struct {
 	holdFrom         int
 	pending          []object
 	keepalives       int
+	delivery         *streamDeliveryTracker
 	recovered        bool
 	unfinished       map[int]bool
 	unindexed        bool // Output activity without a reliable index cannot prove completion.
@@ -46,12 +47,18 @@ func (r *relay) send(event object) error {
 	if r.holdFrom >= 0 {
 		if index, err := indexOf(e); err == nil && index >= r.holdFrom {
 			r.pending = append(r.pending, e)
+			if r.delivery != nil {
+				r.delivery.BufferedEvents++
+			}
 			return nil
 		}
 	}
 	e["sequence_number"] = r.sequence
+	if err := r.writeEvent(e); err != nil {
+		return err
+	}
 	r.sequence++
-	return r.emit([]byte("event: " + str(e, "type") + "\ndata: " + string(encoded(e)) + "\n\n"))
+	return nil
 }
 func indexOf(e object) (int, error) {
 	v, ok := e["output_index"].(json.Number)
@@ -122,12 +129,14 @@ func (r *relay) event(e object) (bool, error) {
 			if r.holdFrom < 0 || i < r.holdFrom {
 				r.holdFrom = i
 			}
+			r.recordSuppressedTool()
 			return false, nil
 		}
 		e = clone(e)
 		e["item"] = normalizeOutput(item)
 		return false, r.send(e)
 	case "response.function_call_arguments.delta", "response.function_call_arguments.done", "response.custom_tool_call_input.delta", "response.custom_tool_call_input.done":
+		r.recordSuppressedTool()
 		return false, nil // Never release unvalidated native tool names/arguments.
 	case "response.created", "response.in_progress", "response.queued":
 		if res, ok := e["response"].(object); ok {
@@ -145,6 +154,7 @@ func (r *relay) event(e object) (bool, error) {
 		return false, r.send(e)
 	default:
 		if strings.HasPrefix(t, "response.function_call_arguments.") || strings.HasPrefix(t, "response.custom_tool_call_input.") {
+			r.recordSuppressedTool()
 			return false, nil
 		}
 		if item, ok := e["item"].(object); ok && nativeTool(item) {
