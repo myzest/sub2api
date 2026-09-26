@@ -5,6 +5,21 @@ const vm=require('node:vm');
 const crypto=require('node:crypto').webcrypto;
 const model=require('../ui/assets/model.js');
 
+test('agent diagnostics distinguish explicit plaintext from missing encryption metadata',()=>{
+  const parent=model.requestText({output_tool_calls:1,output_tools:[{type:'function_call',name:'collaboration.spawn_agent',argument_encryption:'plaintext'}]});
+  assert.match(parent,/明确明文（encrypted_function_args: \[\]）/);
+  assert.match(parent,/不等于客户端已执行/);
+  const old=model.requestText({output_tool_calls:1,output_tools:[{type:'function_call',name:'collaboration.spawn_agent'}]});
+  assert.doesNotMatch(old,/明确明文/);
+  const child=model.requestText({error_source:'plugin_agent_message',client_http_status:400,responses_started:false,agent_input:{messages:1,encrypted_parts:1,encrypted_paths:['input[3].content[0]']},error:'bps_agent_encrypted_content'});
+  assert.match(child,/错误来源：插件子任务消息校验/);
+  assert.match(child,/agent_message 1 项 · encrypted_content 1 段/);
+  assert.match(child,/input\[3\].content\[0\]/);assert.match(child,/Responses 发送阶段：尚未开始/);
+  assert.match(child,/重新发起委派/);assert.doesNotMatch(child,/已解密|已修复密文/);
+  const native=model.requestText({output_tools:[{type:'function_call',name:'direct',argument_encryption:'declared'}]});
+  assert.match(native,/保留原生加密字段声明（未验证密文）/);
+});
+
 test('upstream stream failures display raw evidence without claiming completion',()=>{
   const raw=JSON.stringify({code:'capacity_fixture',type:'server_error',message:"fixture 'raw input' https://fixture.invalid/private?q=1"});
   const text=model.requestText({account_id:58,http_status:200,client_http_status:200,error_source:'upstream_stream',terminal:'error',upstream_error_event:'error',upstream_error_state:'captured_raw',upstream_error:raw,error:'bps_upstream_event',response_attempts:1,protocol_retries:0,output_tool_calls:0});

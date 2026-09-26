@@ -2,14 +2,14 @@
 
 独立的 Sub2API `.s2plugin` 插件，使用已有 OpenAI OAuth 账号，将选定账号的 Responses 请求转换为 BPS 协议。源码和生成文件都在此目录；不需要二改 Sub2API 主程序。
 
-这是 **0.1.16 上游错误原文与流内失败收尾版本**。修复已确认的诊断缺陷：BPS HTTP 200 后发出 `error` / `response.error` 时，旧版丢弃原因并中断传输。现在按明确错误事件结束本轮，保留有界错误原文字段；`response.failed` 保留上游错误码和原因，不伪造成功、不释放未完成工具。此改动不代表已解决账号、容量或请求参数等尚未知的上游根因，也不保证所有子智能体 502 消失。保留 0.1.15 原文工具传输、回放和图像功能，不增加模型请求、不修改宿主或客户端配置；仅编译、打包，未运行功能测试或真实账号请求。务必先读 [HOST_INTEGRATION.md](HOST_INTEGRATION.md) 区分宿主原生 Excel 与插件路径。
+这是 **0.1.17 子智能体明文参数标记修复版本**。依据用户指定的 ranxi2001/sub2api `f671a8d`，补齐旧版遗漏的 `encrypted_function_args: []`：中继还原出的 function 参数是明文，必须明确标记，避免客户端把委派消息误包成 encrypted_content。direct function 调用保留其原生非 null 加密声明，custom 不添加此字段，run_officejs 外层加密标记不复制到内层。已标为加密的旧子任务消息不猜测解密、不删除，需由升级后的父任务重新委派。保留 0.1.16 错误原文、原文工具传输、回放和图像功能。仅编译、打包，未运行功能测试或真实子智能体请求；不修改宿主、账号配置或客户端权限。入口区别见 [HOST_INTEGRATION.md](HOST_INTEGRATION.md)。
 
 ## 安装
 
 适用宿主：本工作区对应 fork 的插件机制，Plugin Protocol / Transport API / UI Bridge v1，**HostService v2**。清单声明 `>=0.2.8 <0.3.0`，版本号本身不能替代这些接口要求；没有在你的服务器镜像上验收。
 
 1. 将 `dist/trusted-publisher.yaml` 中公钥条目合并到服务器已有配置的 `plugins.trusted_publishers`，保留其他发布者，保持 `allow_unsigned: false`。首次添加公钥后重启 Sub2API。
-2. 在插件管理中导入 `dist/oai-basispoints-0.1.16.s2plugin`。包内包含 Linux amd64、Linux arm64、macOS arm64 运行文件。Windows 上运行 Codex 客户端不要求服务端插件也有 Windows 运行文件。
+2. 在插件管理中导入 `dist/oai-basispoints-0.1.17.s2plugin`。包内包含 Linux amd64、Linux arm64、macOS arm64 运行文件。Windows 上运行 Codex 客户端不要求服务端插件也有 Windows 运行文件。
 3. 启用本插件。如果已有 OpenAI OAuth 出站插件处于启用状态，先停用它：宿主的 `openai.oauth.outbound_transport.v1` 只有一个启用槽位，不能与 GPT Inspector 同时占用。
 4. 将宿主此插件能力的灰度比例设为 **100%**，再通过本插件的账号白名单控制 BPS 路由。比例低于 100% 时，部分选定账号可能根本到不了插件。
 5. 打开插件设置，刷新账号。在保持 BPS 路由关闭的情况下，选一个账号、模型和 effort，点击“保存并探测文本”。图片、工具探测也在这里；每项总共最多等待 120 秒，只有点击探测才发上游请求。
@@ -72,13 +72,25 @@
 
 由于插件收到的是宿主已规范化的出站请求，无法恢复被宿主改写的原始模型别名或原始 API Key ID。因此首版用账号白名单选择通道，不用 `-excel` / `-basispoints` 模型后缀识别。
 
+## 子智能体解密错误（0.1.17）
+
+用户在 0.1.16 提供的两次子请求明确返回 `invalid_encrypted_content` / `Encrypted function output content could not be decrypted or decoded.`。这说明已到达 BPS 的请求被加密内容校验拒绝，不是“没有 Subagent 工具”。
+
+对照固定参考提交的 `tools.go::finishClientToolCall` 与 `agent_message_test.go`，本插件旧 function_call 构造漏了 `encrypted_function_args`。参考明确区分缺失/null 与空数组：当工具 Schema 的 message 标记 encrypted:true 时，遗漏该字段可能让 Codex 把实际明文作为加密消息发送。源码缺陷与两次报错吻合；未获取当次父调用/子请求完整原文，也未执行客户端验收，不能把每一种解密错误都归于此缺陷。
+
+- 新的中继 function 调用统一带显式空数组，覆盖普通 FUNCTION、FUNCTION_CODE、三类 collaboration 工具；输出 added/done/completed 与非流式对象复用相同调用对象。custom 保持原状。
+- direct function 的实际非 null 加密声明保留；不会把 run_officejs 外层对 code 的声明当作内层 message 的声明。原生 KV 记录保持原样，账户/会话隔离不变。
+- `agent_message.content` 中已有 encrypted_content 在本地返回 HTTP 400 / `bps_agent_encrypted_content`，不再发送 BPS，不自动重试。检查只针对 agent_message；不是删除全局 encrypted_content，reasoning/compaction 状态及普通明文消息保持既有处理。无法安全修复已污染的旧子任务请求。
+- 升级后停止重试旧子任务，在父任务重新发出原始委派（建议新建父任务作首次验收）。**清空诊断只清记录，不修复会话。**先看父请求“输出工具明细 → 参数加密标记”为 `明确明文（encrypted_function_args: []）`，再看新子请求的 agent_message/encrypted_content 计数；最终以子任务实际读取文件并返回结果为准。
+- 诊断只记录加密标记状态、消息计数及最多 16 个字段位置，不保存委派正文或密文。`declared` 仅表示原生加密声明保留，不代表已经解密。
+
 ## 上游错误与子智能体 502（0.1.16）
 
 - 子智能体的独立模型请求经过与父任务相同的 Responses 路由；工具目录含 `collaboration.spawn_agent` 或启动已接受，不代表其模型请求已完成。插件没有另设 Subagent 禁用分支。
 - 用户提供的两次账号 #58 / gpt-6-astra 请求均为 BPS HTTP 200 后流内失败，未输出工具。旧记录未保存原始事件，无法补回当时的 `code/type/message/param`，也不能据此认定是额度、模型白名单、并发限制或会话长度。
 - 新版将显式 `error` / `response.error` 归为“BPS 流内错误事件”，保留结束状态与上游错误事件类型，正常结束插件传输；不把失败恢复为 completed，不重试这些显式错误，不执行或保存暂存工具。非流式无完整响应对象时返回 JSON error / 客户端 HTTP 502，仍记录真实上游 HTTP 200。真正断网、无可靠终态或取消仍是失败。
 - 上游 HTTP/SSE/JSON 错误只采集 `message/code/type/param/detail/error` 中支持的字段，字符串不替换、不脱敏，整体上限 64 KiB；detail 最多 8 项、loc 最多 16 段。缺字段、非 JSON、超限或读取失败显示采集状态，不伪造原因。不主动添加 Authorization、Cookie、完整对话或工具参数。错误原文本身可能回显这些内容，分享记录前需自行检查。
-- 升级后确认 v0.1.16 和新实例号；清空旧诊断，在目标设备仅复现一次父任务或子任务，刷新对应的新记录，查看“上游错误事件”“上游错误采集”“上游诊断（错误字段）”。宿主既有错误包装/换号可能仍表现为 502，按诊断 ID 和 Request ID 关联，不调整账号、模型或权限来猜测修复。
+- 升级后确认当前版本和新实例号；清空旧诊断，在目标设备仅复现一次父任务或子任务，刷新对应的新记录，查看“上游错误事件”“上游错误采集”“上游诊断（错误字段）”。宿主既有错误包装/换号可能仍表现为 502，按诊断 ID 和 Request ID 关联，不调整账号、模型或权限来猜测修复。
 
 ## 回放与资源限制
 
@@ -164,7 +176,7 @@
 
 最新 [Excel bridge 0.4.6](https://github.com/Kaixxrua/excel-codex-bridge/tree/66c41df941fb1a963801964c75ff24b4a19e93f2) 补齐了此前固定参考版本没有的实现：Codex 客户端通过 provider 的 `x-openai-actor-authorization` 头启用本地 `image_gen.imagegen`，执行器向 provider 的 `/images/generations`、`/images/edits` 发送独立请求。这与 Responses 的 hosted `image_generation` 是两条不同链路。0.1.11 的“尚未接入”结论仅代表当时版本；0.1.12 已按新参考移植独立接口。
 
-1. 先在服务器停用旧版、导入并启用 0.1.16，保持 BPS 账号白名单。账号所属分组必须允许生图，并能将 `gpt-image-2` 调度到选中的 BPS OAuth 账号；不要把这个图片模型映射成文字模型。插件“允许的模型”是 Responses 文字模型列表，无需为生图追加 `gpt-image-2`。宿主账号的图片工具策略应选择“继承/允许”，不能为“拦截”。
+1. 先在服务器停用旧版、导入并启用 0.1.17，保持 BPS 账号白名单。账号所属分组必须允许生图，并能将 `gpt-image-2` 调度到选中的 BPS OAuth 账号；不要把这个图片模型映射成文字模型。插件“允许的模型”是 Responses 文字模型列表，无需为生图追加 `gpt-image-2`。宿主账号的图片工具策略应选择“继承/允许”，不能为“拦截”。
 2. 修改发起任务的那台电脑的 Codex provider 配置。Windows 为 `%USERPROFILE%\.codex\config.toml`，macOS 为 `~/.codex/config.toml`。在当前 provider 表中合并下面一行；`custom` 应与文件中的 `model_provider` 值一致，保留原 `base_url`、鉴权及其他请求头，不要重复创建同名表或重复键。完整说明见 [codex-imagegen.example.toml](codex-imagegen.example.toml)。
 
    ```toml

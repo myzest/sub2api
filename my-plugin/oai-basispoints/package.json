@@ -1,6 +1,6 @@
 {
   "name": "sub2api-oai-basispoints",
-  "version": "0.1.16",
+  "version": "0.1.17",
   "private": true,
   "scripts": {
     "test": "node --test tests/ui.test.cjs",

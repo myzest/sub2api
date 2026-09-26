@@ -92,6 +92,9 @@ func (s *Server) prepare(ctx context.Context, raw []byte, accountID int64, heade
 	default:
 		return nil, errors.New("input 必须为字符串或数组")
 	}
+	if err := validateAgentInput(input); err != nil {
+		return nil, err
+	}
 	items, err := store.restore(ctx, tools.inputWithCatalogs(input))
 	if err != nil {
 		return nil, err

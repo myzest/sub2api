@@ -1,5 +1,37 @@
 # 交付状态
 
+版本：0.1.17。日期：2026-09-26。开始 HEAD：88c8d6953。
+
+## 故障证据与确认的源码缺陷
+
+- 用户提供的子请求均为账号 #58 / gpt-6-astra / xhigh / v0.1.16：`baaac3470d5bda4ac7d66ae8309e9071`（14:09:05–14:09:15，Request ID d4b65fa8-64de-438f-b78e-1e827782ab84）与 `9c62ea36a8895773babed3f1bec38f57`（14:09:37–14:09:42，Request ID 33f4b4d3-a211-4b55-9249-99d9ec91f67d）。BPS HTTP 200 / SSE error，code=invalid_encrypted_content，message=Encrypted function output content could not be decrypted or decoded.，type=invalid_request_error。回放范围同为 c6b8f3cde2d1545e、无回放/工具历史项、未输出工具。
+- 0.1.16 已捕获真实上游原因；这不是缺少 Subagent 声明或信封 JSON 错误。对照 ranxi2001/sub2api f671a8d tools.go 及 agent_message_test.go，旧插件 convert 构造 function_call 时漏了 encrypted_function_args；参考用显式 [] 告知客户端“实际参数为明文”，与 absent/null 语义不同。该缺陷可以导致明文委派被标为 encrypted_content，链路与用户错误一致。
+- 未取得这两次请求对应父调用/子消息完整原文，未执行桌面端或真实子任务验证；因此确认的是源码兼容缺陷及上游拒绝类别，不能宣称所有解密失败、所有子智能体 502 都已实测解决。
+
+## 本轮修复
+
+- 普通 FUNCTION 与 FUNCTION_CODE 明文还原统一加 []；SSE added/done/completed 和 JSON 复用转换对象。direct function 非 null 原生加密声明保留，wrapper 对 code 的声明不下传，custom 不加字段。原生回放与 args 不改。
+- 对旧 agent_message 中 encrypted_content 返回明确本地 HTTP 400 / bps_agent_encrypted_content；不发送 BPS、不重试、不尝试解密、改类型或静默删除。只检查 agent_message，不删除 reasoning/compaction 中的加密状态。
+- 新诊断记录父调用参数加密标记、子消息总数、加密段数及最多 16 个路径；不记录委派正文或密文。UI 明确区分新标记、缺失/null、原生加密声明以及旧记录未提供信息。
+- 仅修改独立插件；未改宿主、账号、模型白名单、客户端权限、全局记忆或 hook。没有新增模型重试或重放旧工具。
+
+## 交付与验证边界
+
+遵照用户“不自测、直接打包”：仅源码复核、gofmt、Go build、两个 go test -c（只编译）、JS 语法检查和签名/归档校验。不运行 Go/Node/浏览器功能测试，不向真实上游发送请求，不启动子智能体测试，不部署、不提交 Git。模拟子消息构造只在回归源码中，不冒充 Codex 客户端实测。
+
+交付检查：`GOWORK=off go build ./...`、basispoints/packager 两包的 `go test -c`、全部 UI/测试 JS 的 `node --check` 及 `git diff --check` 已通过。Linux amd64、Linux arm64、macOS arm64 编译完成；安装包 17,411,462 bytes、55 个归档文件，Ed25519 签名、SHA256 与本地构建一致性校验通过，未包含私钥。安装包 SHA256：`cb328df830b6f32b012b0844c59dc24f61d898029e13d9385bfb0e04ee1cd8c6`。发行 ZIP 附源码归档（包含新增 agent_message 实现与回归源码）、原发布者公钥配置和文档；各归档附 `.sha256`，旧版产物保留。归档逐文件与当前源码/产物核对，不执行任何功能用例。
+
+## 用户验收
+
+1. 停用旧版，导入并启用 0.1.17，沿用原发布者公钥、现有路由和账号。确认新版本/实例。
+2. 停止重试旧子任务；升级不能修改已保存的旧消息，清空诊断也不能修复会话。首次验收建议新建父任务，再明确委派一次读取 README.md 的子任务。
+3. 先查父请求的 collaboration.spawn_agent 输出，参数加密标记应为“明确明文（encrypted_function_args: []）”；再查新子请求 agent_message/encrypted_content 计数及错误。其他直接原生加密声明单独保留，不把 declared 当作解密成功。
+4. 以子任务实际读取并返回内容为验收结果。旧请求如本地返回 bps_agent_encrypted_content，应重新委派而不是继续重试；若新父调用标记正确但新子请求仍报解密错误，继续对照父子新诊断定位客户端或宿主字段转换，不删除密文。
+
+---
+
+## 0.1.16 交付记录（历史）
+
 版本：0.1.16。日期：2026-09-26。
 
 ## 已确认缺陷与范围
@@ -79,7 +111,7 @@ raw_transport_test.go 覆盖 custom/function code 原文、特殊字符、大整
 - 随后取得 v0.1.7 失败记录 `991cfab37f3b5843743cb35fafdc45a1`：JPEG 输入 1 张、附件复用 1 张、Responses HTTP 400，`Invalid input: Expected image type to be a supported format: .jpeg, .jpg, .png, .gif, .webp but got none.`，param=input。工具目录仍正常。这证明错误位于 Responses 对图片类型的校验，但当次没有上传请求或文件名证据。
 - 用户新增 `input[48].type=custom_tool_call: 工具调用没有本插件的回放句柄`（诊断 `92d21f23fedd4389c33cdae04d38c062`），并确认发生于切换通道/模型或继续旧任务。旧 restore 对所有非插件 ID 均拒绝，两个参考源码存在历史 fallback，本版补齐该路径。
 
-## 本版验收入口
+## 早期版本验收入口（历史）
 
 1. 插件页“保存并探测图片”：随机六位数字图，默认 JPEG，可选 PNG 对照；默认 high，另可选 auto/low/original。分别显示附件与 Responses HTTP、失败阶段、脱敏诊断、图像和实际回复。
 2. 插件页“保存并探测工具”：第一轮从 input.additional_tools 提取 namespaced custom 工具，逐字核对包含引号、反斜杠和换行的 input；第二轮核对 function 的嵌套参数及大整数；第三轮 tool_choice=none 恢复两种工具历史并核对两个随机结果。最多三次请求，不执行样本文本、不读取桌面文件。

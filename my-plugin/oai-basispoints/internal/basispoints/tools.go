@@ -241,7 +241,8 @@ func (c *toolCatalog) convert(native object) (object, error) {
 	var inner object
 	var err error
 	transport := ""
-	if relayName(str(native, "name")) && str(native, "type") == "function_call" {
+	isRelay := relayName(str(native, "name")) && str(native, "type") == "function_call"
+	if isRelay {
 		var diagnostic relayDiagnostic
 		inner, diagnostic, err = decodeRelayEnvelope(native)
 		transport = diagnostic.Transport
@@ -323,6 +324,15 @@ func (c *toolCatalog) convert(native object) (object, error) {
 			return nil, errors.New("BPS 工具参数不符合客户端 JSON Schema")
 		}
 		client["arguments"] = string(encoded(obj))
+		// ranxi2001/sub2api f671a8d, finishClientToolCall: an empty list
+		// means plaintext, whereas a missing/null field may make Codex
+		// collaboration tools treat message as encrypted child input.
+		client["encrypted_function_args"] = []string{}
+		if !isRelay && native["encrypted_function_args"] != nil {
+			// Only a direct call describes these same arguments. Metadata on
+			// the run_officejs wrapper belongs to code, not the decoded tool.
+			client["encrypted_function_args"] = native["encrypted_function_args"]
+		}
 	}
 	return client, nil
 }

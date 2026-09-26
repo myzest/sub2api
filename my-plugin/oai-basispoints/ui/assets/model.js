@@ -10,7 +10,7 @@
   }
   function valueText(value) { return typeof value==='object'?JSON.stringify(value):String(value); }
   function errorSourceText(source) {
-    return {plugin_local_config:'插件本地模型配置',plugin_local_request:'插件本地请求校验',plugin_history:'工具历史恢复',attachment:'图片附件链路',upstream_http:'BPS HTTP 拒绝',upstream_transport:'BPS 连接或传输',upstream_response:'BPS 响应未完成',upstream_stream:'BPS 流内错误事件',tool_relay:'工具信封解析',response_conversion:'响应转换',plugin_transport:'插件传输',client_transport:'客户端传输',request_canceled:'宿主或客户端已取消请求',request_timeout_or_canceled:'请求超时或取消'}[source]||source;
+    return {plugin_local_config:'插件本地模型配置',plugin_local_request:'插件本地请求校验',plugin_history:'工具历史恢复',plugin_agent_message:'插件子任务消息校验',attachment:'图片附件链路',upstream_http:'BPS HTTP 拒绝',upstream_transport:'BPS 连接或传输',upstream_response:'BPS 响应未完成',upstream_stream:'BPS 流内错误事件',tool_relay:'工具信封解析',response_conversion:'响应转换',plugin_transport:'插件传输',client_transport:'客户端传输',request_canceled:'宿主或客户端已取消请求',request_timeout_or_canceled:'请求超时或取消'}[source]||source;
   }
   function relayText(relays) {
     if(!Array.isArray(relays)||!relays.length)return [];
@@ -227,6 +227,11 @@
     const sources=Object.entries(r.tool_sources||{}).map(([name,count])=>`${name} × ${count}`);
     if(sources.length)lines.push(`工具声明来源（未展开 namespace）：${sources.join('，')}`);
     if(r.additional_tool_items)lines.push(`additional_tools 输入项：${r.additional_tool_items}`);
+    if(r.agent_input){
+      lines.push(`子任务输入：agent_message ${r.agent_input.messages||0} 项 · encrypted_content ${r.agent_input.encrypted_parts||0} 段`);
+      for(const path of (r.agent_input.encrypted_paths||[]).slice(0,16))lines.push(`  加密消息位置：${path}（不记录内容）`);
+      if(r.agent_input.encrypted_parts)lines.push('旧子任务加密消息不能猜测解码、删除或改标明文；请从升级后的父任务重新发起委派，不要反复重试旧子任务。');
+    }
     const historyTypes=Object.entries(r.history_types||{}).map(([name,count])=>`${name} × ${count}`);
     if(historyTypes.length)lines.push(`历史工具项：${historyTypes.join('，')}`);
     const handleLabels={plugin:'插件句柄',external:'外部历史 ID',missing:'缺少 ID',invalid_plugin:'插件句柄格式异常'};
@@ -242,7 +247,11 @@
     lines.push(`输出工具调用：${r.output_tool_calls||0}`);
     if(r.output_tools?.length){
       lines.push('输出工具明细（转换后，最多 16 项；不等于客户端已执行）：');
-      for(const tool of r.output_tools.slice(0,16))lines.push(`  ${tool.type} · ${tool.name||'名称未记录'}`);
+      const encryption={plaintext:'明确明文（encrypted_function_args: []）',declared:'保留原生加密字段声明（未验证密文）',absent:'字段缺失（不等于明确明文）',null:'null（不等于明确明文）',invalid:'非数组元数据'};
+      for(const tool of r.output_tools.slice(0,16)){
+        lines.push(`  ${tool.type} · ${tool.name||'名称未记录'}`);
+        if(tool.argument_encryption)lines.push(`    参数加密标记：${encryption[tool.argument_encryption]||tool.argument_encryption}`);
+      }
       if(r.output_tool_calls>r.output_tools.length)lines.push('输出工具明细已截断。');
     }
     const nativeTypes=Object.entries(r.native_tool_types||{}).map(([name,count])=>`${name} × ${count}`);

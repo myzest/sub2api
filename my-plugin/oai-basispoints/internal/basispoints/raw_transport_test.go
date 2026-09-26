@@ -53,10 +53,14 @@ func TestMarkedTransportsPreserveCodeAndOriginalReplay(t *testing.T) {
 			}
 			call := response["output"].([]any)[0].(object)
 			if mode == "custom" {
+				if _, exists := call["encrypted_function_args"]; exists {
+					t.Fatal("function encryption metadata added to custom call")
+				}
 				if call["input"] != text || str(call, "type") != "custom_tool_call" {
 					t.Fatal("custom bytes changed")
 				}
 			} else {
+				requirePlaintextAgentArgs(t, call)
 				args, err := decodeObject([]byte(str(call, "arguments")))
 				if err != nil || args["code"] != text || args["count"] != json.Number("9007199254740993") {
 					t.Fatal("function code or number changed", err)

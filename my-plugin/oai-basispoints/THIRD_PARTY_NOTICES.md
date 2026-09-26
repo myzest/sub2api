@@ -32,3 +32,8 @@ This is a local Sub2API transport adapter, not an official OpenAI integration. R
 ## Version 0.1.15 host protocol reference
 
 Reviewed ranxi2001/sub2api production at f671a8d30c34706d8526accadf6a6ad5f40f855e (2026-09-26). Its backend/internal/service/basispoints/custom_transport.go, function_code_transport.go, catalog.go and stream.go informed the marked raw-text transport and explicit protocol-failure terminal. The source package's attribution is retained in licenses/ranxi-sub2api-basispoints.NOTICE.md. The repository is LGPL-3.0; that notice credits hloolx/codex2api's MIT-origin protocol port. This adapter retains its own strict decoder, schema validation, persistent scoped replay and image transport. It does not import host account settings, the image URL server or automatic model retries.
+
+
+## Version 0.1.17 collaboration message reference
+
+The same ranxi2001/sub2api commit f671a8d30c34706d8526accadf6a6ad5f40f855e already sets an explicit empty encrypted_function_args list for plaintext relay function calls in tools.go, preserves direct-call encryption metadata, and tests collaboration messages in agent_message_test.go. Those previously omitted behaviors informed this fix. Its content.go and agent-message fixtures inform a narrowly scoped rejection of opaque encrypted_content in agent_message, without interpreting ciphertext or deleting reasoning/compaction state. The retained LGPL-3.0 and origin notice above apply. New diagnostics contain only marker states, counts and protocol paths; no client collaboration tool is executed by this adapter.

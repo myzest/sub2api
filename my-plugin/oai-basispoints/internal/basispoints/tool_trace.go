@@ -19,8 +19,9 @@ type clientToolDiagnostic struct {
 }
 
 type outputToolDiagnostic struct {
-	Type string `json:"type"`
-	Name string `json:"name"`
+	Type               string `json:"type"`
+	Name               string `json:"name"`
+	ArgumentEncryption string `json:"argument_encryption,omitempty"`
 }
 
 func diagnosticToolName(item object) string {
@@ -167,6 +168,6 @@ func (d *requestDiagnostic) output(response object) {
 	d.OutputToolCalls = len(calls)
 	d.OutputTools = []outputToolDiagnostic{}
 	for _, call := range calls[:min(len(calls), toolTraceLimit)] {
-		d.OutputTools = append(d.OutputTools, outputToolDiagnostic{Type: str(call, "type"), Name: diagnosticToolName(call)})
+		d.OutputTools = append(d.OutputTools, outputToolDiagnostic{Type: str(call, "type"), Name: diagnosticToolName(call), ArgumentEncryption: argumentEncryptionState(call)})
 	}
 }

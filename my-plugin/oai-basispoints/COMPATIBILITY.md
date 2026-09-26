@@ -84,3 +84,10 @@
 已补或更新 `relay_envelope_test.go`、`native_tools_test.go`、`stream_compat_test.go`、`picture_fallback_test.go`、`transport_compat_test.go` 及 `tests/ui.test.cjs`。用例覆盖反斜杠原文、对象提取/拒绝歧义、原生回放类型、混合与串行工具、结果轮次、完整项恢复与半项拒绝、SSE 索引、保活取消、缓存重传/省略、工具结果图片、网络不可用仍用缓存、HTTP 重试范围及 Images 假成功。Go 用例只编译，JS 只做语法检查，没有执行用例。
 
 构建和签名状态以 [VALIDATION.md](VALIDATION.md) 为准；生产恢复情况由用户升级后验收。
+
+
+## 0.1.17 父子消息加密标记补齐
+
+采用 ranxi2001/sub2api f671a8d 已有语义：中继 function 明文参数带 encrypted_function_args 空数组，direct 原生非 null 声明保留，wrapper 元数据不下传到内层，custom 不加 function 专属字段。旧 agent_message 中的 encrypted_content 明确拒绝，不采用“内容像明文就解码/改类型”的启发式处理。reasoning/compaction 的加密内容不因本补丁删除。
+
+测试源码覆盖三种协作工具、relay/direct、SSE 三处一致性、完整回放及 KV 缺失重建、direct 声明保留、FUNCTION_CODE 与 custom 边界、加密旧消息本地拒绝与有界诊断。仅编译不执行，真实子任务仍由用户验收。

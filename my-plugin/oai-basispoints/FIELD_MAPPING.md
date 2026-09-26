@@ -155,3 +155,18 @@
 | 本地信封失败 / 真正连接中断 | 保留既有分类与严格校验，不伪装为上游显式 error | `tool_relay` / 连接或响应转换等既有来源 |
 
 不新增重试。错误字段字符串不脱敏、不修复；不整包复制未知上下文、请求头或对话。无字段/非 JSON/超限/读取失败仍有明确采集状态；64 KiB 上限，detail 最多 8 项、loc 最多 16 段。
+
+
+## 0.1.17 子智能体参数加密语义
+
+| 路径 | 行为 |
+| --- | --- |
+| run_officejs → 客户端 function_call（含 FUNCTION_CODE） | 添加 `encrypted_function_args: []`，明确参数是明文；不会继承 wrapper 的 code 加密声明 |
+| direct function_call | 非 null 原生 encrypted_function_args 保留；缺失/null 则显式空数组；原生回放原件不改 |
+| custom_tool_call | 不添加 function 专属加密字段 |
+| SSE added/done/completed、JSON response.output | 从同一个转换后调用对象输出，避免只在最后终态加字段 |
+| agent_message.content[].type=encrypted_content | 本地 HTTP 400 / bps_agent_encrypted_content / plugin_agent_message，发送上游次数为零，不猜测解码或丢弃 |
+| agent_message 明文、reasoning/compaction 加密状态 | 保持原有透明传输及清理规则，不全局剥除 encrypted_content |
+| 诊断 | `output_tools[].argument_encryption` 记录 plaintext/declared/absent/null/invalid；`agent_input` 记录消息数、加密段数和最多 16 个字段位置，均不含正文 |
+
+依据 ranxi2001/sub2api f671a8d 的 tools.go、content.go、agent_message_test.go；旧子消息不能靠清空诊断修复，应在更新后的父任务重新委派。

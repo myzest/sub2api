@@ -44,6 +44,7 @@ type requestDiagnostic struct {
 	ToolNames              []string                  `json:"tool_names"`
 	HistoryTypes           map[string]int            `json:"history_types,omitempty"`
 	HistoryHandles         map[string]int            `json:"history_handles,omitempty"`
+	AgentInput             *agentInputDiagnostic     `json:"agent_input,omitempty"`
 	ToolChoice             string                    `json:"tool_choice"`
 	ParallelToolCalls      bool                      `json:"parallel_tool_calls"`
 	InputImages            int                       `json:"input_images"`
@@ -167,6 +168,10 @@ func (d *requestDiagnostic) input(raw []byte) {
 	d.Images, d.InputImages = summarizeImages(source)
 	d.HistoryTypes, d.HistoryHandles = map[string]int{}, map[string]int{}
 	input, _ := source["input"].([]any)
+	agentInput := inspectAgentInput(input)
+	if agentInput.Messages > 0 {
+		d.AgentInput = &agentInput
+	}
 	d.clientToolHistory(input)
 	for _, raw := range input {
 		item, ok := raw.(object)
