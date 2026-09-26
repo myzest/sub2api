@@ -1,20 +1,18 @@
 package basispoints
 
 import (
-	"errors"
 	"fmt"
 	"strings"
 )
 
-var errAgentEncryptedContent = errors.New("本插件不支持 agent_message 中的 encrypted_content，不能安全重解释为明文；请在升级后的父任务重新发起明文委派，不要继续重试旧子任务消息")
-
-// The reference's agent_message_test.go rejects both plain-looking strings
-// and ciphertext labelled encrypted_content. Do not guess, decrypt or drop
-// them. Scope this check to agent messages; reasoning/compaction stay intact.
+// Encryption labels alone do not prove corruption or age. Both original
+// adapters preserve ordinary input items; BPS validates opaque content.
+// This inspection is diagnostic only and must not rewrite or reject input.
 type agentInputDiagnostic struct {
 	Messages       int      `json:"messages"`
 	EncryptedParts int      `json:"encrypted_parts"`
 	EncryptedPaths []string `json:"encrypted_paths,omitempty"`
+	Handling       string   `json:"handling,omitempty"`
 }
 
 func inspectAgentInput(input []any) agentInputDiagnostic {
@@ -38,14 +36,6 @@ func inspectAgentInput(input []any) agentInputDiagnostic {
 		}
 	}
 	return d
-}
-
-func validateAgentInput(input []any) error {
-	d := inspectAgentInput(input)
-	if d.EncryptedParts > 0 {
-		return fmt.Errorf("%s.type=encrypted_content: %w", d.EncryptedPaths[0], errAgentEncryptedContent)
-	}
-	return nil
 }
 
 // Only classify protocol metadata, never retain argument names or values.

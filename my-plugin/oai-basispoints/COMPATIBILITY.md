@@ -86,8 +86,23 @@
 构建和签名状态以 [VALIDATION.md](VALIDATION.md) 为准；生产恢复情况由用户升级后验收。
 
 
-## 0.1.17 父子消息加密标记补齐
+## 0.1.17 父子消息加密标记补齐（历史，本地拒绝已撤销）
 
 采用 ranxi2001/sub2api f671a8d 已有语义：中继 function 明文参数带 encrypted_function_args 空数组，direct 原生非 null 声明保留，wrapper 元数据不下传到内层，custom 不加 function 专属字段。旧 agent_message 中的 encrypted_content 明确拒绝，不采用“内容像明文就解码/改类型”的启发式处理。reasoning/compaction 的加密内容不因本补丁删除。
 
 测试源码覆盖三种协作工具、relay/direct、SSE 三处一致性、完整回放及 KV 缺失重建、direct 声明保留、FUNCTION_CODE 与 custom 边界、加密旧消息本地拒绝与有界诊断。仅编译不执行，真实子任务仍由用户验收。
+
+
+## 0.1.18 纠正加密子消息本地误拦截
+
+恢复 excel-codex-bridge 8a277df 的 translate_input_items 及 CPA 708082d 普通 item 透传语义。仅从字段名不能判断消息失效或来自旧任务，prepare 不再因 encrypted_content 拒绝 agent_message。新委派的明文参数标记不回滚，旧会话的加密内容和顺序保留，由上游验证。
+
+回归源码用 25 条消息/16 段加密的合成样本覆盖流式与非流式、上游完成与显式解密错误、单次发送、历史原样、有界诊断；不包含真实用户密文。文本探测/路由状态分别保存并显示 ID/时间/来源。只编译，不执行用例；不把模拟上游完成当作真实解密证明。
+
+
+## 0.1.19 静态复核与边界修复
+
+- 图片回退曾递归进入不透明加密段的任意扩展对象，若内部字段恰好具有 input_image 形状，就可能被上传、替换或计数。转换和摘要现在在 encrypted_content 段边界停止，同级正常图片仍保留既有处理；不增加解密或重新解释。
+- 纠正路由历史的绝对来源提示：主动图片路由探测也进入该列表，通过 origin=image_route_probe 与 route_diagnostic_id 对应，不再全部描述成客户端请求。
+- 新增混合 additional_tools、加密 agent_message、KV 命中/缺失/外部历史的回归源码；修复重复请求使捕获通道永久阻塞的用例缺陷。所有用例仅编译或语法检查，未执行。
+- 保留 0.1.18 移除本地加密字段拒绝、0.1.17 明文参数标记，以及真实上游失败原文；不扩大模型、账号或权限，不承诺任意旧密文都可解密。

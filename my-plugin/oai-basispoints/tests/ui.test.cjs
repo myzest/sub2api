@@ -15,7 +15,7 @@ test('agent diagnostics distinguish explicit plaintext from missing encryption m
   assert.match(child,/错误来源：插件子任务消息校验/);
   assert.match(child,/agent_message 1 项 · encrypted_content 1 段/);
   assert.match(child,/input\[3\].content\[0\]/);assert.match(child,/Responses 发送阶段：尚未开始/);
-  assert.match(child,/重新发起委派/);assert.doesNotMatch(child,/已解密|已修复密文/);
+  assert.match(child,/不代表 BPS 拒绝/);assert.match(child,/升级后可保留会话重试/);assert.doesNotMatch(child,/已解密|已修复密文/);
   const native=model.requestText({output_tools:[{type:'function_call',name:'direct',argument_encryption:'declared'}]});
   assert.match(native,/保留原生加密字段声明（未验证密文）/);
 });
@@ -93,4 +93,30 @@ test('bridge rejects forged messages and resolves only the matching parent/token
   await Promise.resolve();assert.equal(resolved,false);
   handlers.message({source:parent,data:response});assert.equal((await result).config.route_enabled,false);assert.equal(timers.size,0);
   const pending=context.window.BasisPointsBridge.call('plugin.status');handlers.pagehide();await assert.rejects(pending,/已关闭/);assert.equal(timers.size,0);
+});
+
+
+test('probe results identify their own source, ID and time instead of client route errors',()=>{
+  const text=model.probeText({id:'probe-current',kind:'text',state:'succeeded',started_at:1790404000,finished_at:1790404002,account_id:58,model:'gpt-6-astra',effort:'xhigh',http_status:200,message:'fixture completed'});
+  assert.match(text,/请求来源：插件主动文本探测/);assert.match(text,/探测 ID：probe-current/);
+  assert.match(text,/开始时间：/);assert.match(text,/结束时间：/);assert.match(text,/不读取 Codex 会话/);
+  const route=model.requestText({id:'route-other',origin:'route',error_source:'plugin_agent_message',error:'bps_agent_encrypted_content'});
+  assert.match(route,/不是“保存并探测文本”的结果/);assert.doesNotMatch(text,/bps_agent_encrypted_content|route-other/);
+});
+
+test('opaque agent content preservation never claims decryption or old history',()=>{
+  const text=model.requestText({origin:'route',responses_started:false,agent_input:{messages:25,encrypted_parts:16,encrypted_paths:['input[63].content[1]'],handling:'preserved'}});
+  assert.match(text,/原始加密字段及消息顺序已保留/);assert.match(text,/未解密/);assert.match(text,/尚未开始/);
+  assert.doesNotMatch(text,/不要反复重试旧子任务|已解密|必须新建/);
+  const unknown=model.requestText({agent_input:{messages:1,encrypted_parts:1}});assert.match(unknown,/未提供处理结果/);
+});
+
+test('image route probe history points back to its own probe instead of a client request',()=>{
+  const text=model.requestText({id:'image-route-id',origin:'image_route_probe'});
+  assert.match(text,/记录归属：插件主动图片路由探测/);
+  assert.match(text,/路由诊断 ID 核对/);
+  assert.doesNotMatch(text,/记录归属：客户端请求/);
+  const probe=model.probeText({id:'probe-image-id',kind:'image_route',state:'succeeded',route_diagnostic_id:'image-route-id'});
+  assert.match(probe,/探测 ID：probe-image-id/);
+  assert.match(probe,/路由诊断 ID：image-route-id/);
 });

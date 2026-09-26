@@ -157,7 +157,7 @@
 不新增重试。错误字段字符串不脱敏、不修复；不整包复制未知上下文、请求头或对话。无字段/非 JSON/超限/读取失败仍有明确采集状态；64 KiB 上限，detail 最多 8 项、loc 最多 16 段。
 
 
-## 0.1.17 子智能体参数加密语义
+## 子智能体参数加密语义（0.1.19 复核）
 
 | 路径 | 行为 |
 | --- | --- |
@@ -165,8 +165,11 @@
 | direct function_call | 非 null 原生 encrypted_function_args 保留；缺失/null 则显式空数组；原生回放原件不改 |
 | custom_tool_call | 不添加 function 专属加密字段 |
 | SSE added/done/completed、JSON response.output | 从同一个转换后调用对象输出，避免只在最后终态加字段 |
-| agent_message.content[].type=encrypted_content | 本地 HTTP 400 / bps_agent_encrypted_content / plugin_agent_message，发送上游次数为零，不猜测解码或丢弃 |
+| agent_message.content[].type=encrypted_content | 原样保留，与普通输入一同透传；撤销 0.1.17 的本地拒绝，不猜测解码、不改标明文或丢弃 |
+| 图片处理与计数 | 不进入 type=encrypted_content 段内部扫描图片；同级正常 input_image 维持已有上传/回退规则；这不改变上游 schema 校验 |
 | agent_message 明文、reasoning/compaction 加密状态 | 保持原有透明传输及清理规则，不全局剥除 encrypted_content |
 | 诊断 | `output_tools[].argument_encryption` 记录 plaintext/declared/absent/null/invalid；`agent_input` 记录消息数、加密段数和最多 16 个字段位置，均不含正文 |
 
-依据 ranxi2001/sub2api f671a8d 的 tools.go、content.go、agent_message_test.go；旧子消息不能靠清空诊断修复，应在更新后的父任务重新委派。
+新输出明文标记依据 ranxi2001/sub2api f671a8d 的 tools.go；普通输入改回 Excel bridge 8a277df / CPA 708082d 的透传行为，不再采用 ranxi content.go 的加密段白名单拒绝。agent_input.handling=preserved 表示已保留到准备好的上游请求，不等于已发送或解密成功。旧 plugin_agent_message 记录按历史版本解释，不改写既有记录。
+
+0.1.19 复核：普通 item 仍沿用 cleanInput 的既有规则（删除 internal_chat_message_metadata_passthrough），并非对所有私有字段作逐字节代理。加密段本身的正文值与扩展字段保持不透明。

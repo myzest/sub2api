@@ -80,6 +80,11 @@ func (p *pictureFallback) walk(ctx context.Context, value any, kind, path string
 		}
 		return next, nil
 	case object:
+		// Opaque encrypted parts are not picture containers. Their extension
+		// fields belong to the upstream protocol and must not be rewritten.
+		if strings.EqualFold(strings.TrimSpace(str(v, "type")), "encrypted_content") {
+			return v, nil
+		}
 		url := str(v, "image_url")
 		if str(v, "type") == "input_image" && len(url) >= 5 && strings.EqualFold(url[:5], "data:") {
 			return p.picture(ctx, v, kind, path)

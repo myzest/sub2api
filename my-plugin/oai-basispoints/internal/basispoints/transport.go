@@ -161,10 +161,6 @@ func (s *Server) Forward(stream pluginv1.TransportPlugin_ForwardServer) (result 
 	d.Stage = "prepare"
 	plan, err := s.prepare(ctx, buffer.Bytes(), start.AccountId, headersFromProto(start.Headers), cfg)
 	if err != nil {
-		if errors.Is(err, errAgentEncryptedContent) {
-			d.ErrorSource = "plugin_agent_message"
-			return w.reject(400, "bps_agent_encrypted_content", err.Error())
-		}
 		if errors.Is(err, errModelNotAllowed) {
 			d.ErrorSource = "plugin_local_config"
 			return w.reject(400, "bps_model_not_allowed", err.Error())
@@ -175,6 +171,9 @@ func (s *Server) Forward(stream pluginv1.TransportPlugin_ForwardServer) (result 
 		return w.reject(400, "bps_invalid_request", err.Error())
 	}
 	plan.tools.observeRelay = d.observeRelay
+	if d.AgentInput != nil {
+		d.AgentInput.Handling = "preserved"
+	}
 	d.catalog(plan.tools)
 	d.ReasoningEffort = str(plan.body, "reasoning_effort")
 	d.Stage = "identity"

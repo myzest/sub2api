@@ -141,46 +141,173 @@ func TestAgentDirectMetadataPreservedButWrapperMetadataNotCopied(t *testing.T) {
 	requirePlaintextAgentArgs(t, client)
 }
 
-func TestAgentEncryptedInputFailsBeforeUpstreamWithoutChangingContents(t *testing.T) {
+// Fixture-only forwarding checks, not proof that BPS accepts arbitrary ciphertext.
+func TestAgentEncryptedInputPreservedWithoutLocalRejection(t *testing.T) {
 	for _, value := range []any{"plain-looking old task", "gAAAAABopaqueFixture", "", nil} {
-		var requests atomic.Int32
-		up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { requests.Add(1); w.WriteHeader(503) }))
-		s := fixtureServer()
-		routeFixture(s, up.URL+"/responses")
 		source := fixtureRequest()
-		source["input"] = []any{object{"type": "agent_message", "content": []any{object{"type": "encrypted_content", "encrypted_content": value}}}}
-		body := encoded(source)
-		frames := forward(t, transportClient(t, s), bpsStart(body), body)
-		up.Close()
-		d := s.lastRequest
-		if requests.Load() != 0 || d.ResponseAttempts != 0 || d.ResponsesStarted || d.UpstreamStarted || d.ClientHTTPStatus != 400 || d.ErrorSource != "plugin_agent_message" || d.AgentInput == nil || d.AgentInput.EncryptedParts != 1 {
-			t.Fatal("opaque agent message reached upstream or was misclassified")
-		}
-		result, err := decodeObject(bodyOf(frames))
-		if err != nil || str(result["error"].(object), "code") != "bps_agent_encrypted_content" || frames[len(frames)-1].GetEnd() == nil {
-			t.Fatal("missing actionable local rejection", err)
-		}
-		for _, frame := range frames {
-			if frame.GetError() != nil {
-				t.Fatal("local rejection broke transport")
-			}
-		}
-		if digest(source) != digest(mustDecodeAgentFixture(t, body)) {
-			t.Fatal("input changed")
-		}
-		if text, ok := value.(string); ok && text != "" && strings.Contains(string(bodyOf(frames)), text) {
-			t.Fatal("error copied agent contents")
+		source["input"] = []any{object{"type": "agent_message", "author": "/root/worker", "recipient": "/root", "content": []any{
+			object{"type": "input_text", "text": "status prefix"}, object{"type": "encrypted_content", "encrypted_content": value, "extension": object{"unchanged": true}},
+		}}}
+		original := digest(source)
+		p := mustPlan(t, fixtureServer(), source, 7)
+		items := p.body["input"].([]any)
+		if digest(items[len(items)-1:]) != digest(source["input"]) || digest(source) != original {
+			t.Fatal("agent encrypted content was changed, dropped or decoded")
 		}
 	}
 }
 
-func mustDecodeAgentFixture(t *testing.T, body []byte) object {
-	t.Helper()
-	v, err := decodeObject(body)
-	if err != nil {
-		t.Fatal(err)
+func TestAgentHistoryForwardedAndUpstreamErrorsRetained(t *testing.T) {
+	for _, stream := range []bool{false, true} {
+		for _, rejected := range []bool{false, true} {
+			var requests atomic.Int32
+			received := make(chan object, 1)
+			up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				requests.Add(1)
+				data, err := io.ReadAll(r.Body)
+				if err != nil {
+					t.Error(err)
+					w.WriteHeader(500)
+					return
+				}
+				body, err := decodeObject(data)
+				if err != nil {
+					t.Error(err)
+					w.WriteHeader(500)
+					return
+				}
+				select {
+				case received <- body:
+				default:
+					t.Error("unexpected extra upstream request")
+					w.WriteHeader(http.StatusInternalServerError)
+					return
+				}
+				if rejected {
+					w.Header().Set("Content-Type", "text/event-stream")
+					io.WriteString(w, eventBytes(object{"type": "error", "error": object{"code": "invalid_encrypted_content", "message": "Encrypted function output content could not be decrypted or decoded.", "type": "invalid_request_error"}}))
+				} else {
+					w.Header().Set("Content-Type", "application/json")
+					w.Write(encoded(completed(terminalText("fixture response"))))
+				}
+			}))
+			s := fixtureServer()
+			routeFixture(s, up.URL+"/responses")
+			source := fixtureRequest()
+			input := []any{message("user", "fixture task")}
+			for i := 0; i < 25; i++ {
+				part := object{"type": "input_text", "text": "plaintext fixture"}
+				if i < 16 {
+					part = object{"type": "encrypted_content", "encrypted_content": "opaque fixture \r\n\t你好🙂"}
+				}
+				input = append(input, object{"type": "agent_message", "author": "/root/worker", "recipient": "/root", "content": []any{object{"type": "input_text", "text": "prefix"}, part}})
+			}
+			source["input"], source["stream"] = input, stream
+			body := encoded(source)
+			frames := forward(t, transportClient(t, s), bpsStart(body), body)
+			up.Close()
+			d := s.lastRequest
+			if requests.Load() != 1 || d.ResponseAttempts != 1 || !d.ResponsesStarted || d.HTTPStatus != 200 || d.AgentInput == nil || d.AgentInput.Messages != 25 || d.AgentInput.EncryptedParts != 16 || d.AgentInput.Handling != "preserved" {
+				t.Fatal("input was locally rejected or resent", d)
+			}
+			select {
+			case actual := <-received:
+				items := actual["input"].([]any)
+				if digest(items[len(items)-len(input):]) != digest(input) {
+					t.Fatal("history fields or order changed")
+				}
+			default:
+				t.Fatal("no upstream request captured")
+			}
+			if d.ErrorSource == "plugin_agent_message" || frames[len(frames)-1].GetEnd() == nil {
+				t.Fatal("legacy local rejection or incomplete delivery")
+			}
+			for _, frame := range frames {
+				if frame.GetError() != nil {
+					t.Fatal("transport error instead of explicit upstream result")
+				}
+			}
+			if rejected {
+				if d.ErrorSource != "upstream_stream" || d.Terminal != "error" || !strings.Contains(d.UpstreamError, "invalid_encrypted_content") {
+					t.Fatal("upstream rejection hidden", d)
+				}
+			} else if d.Error != "" || d.Terminal != "response.completed" {
+				t.Fatal("fake upstream success misclassified", d)
+			}
+			if strings.Contains(string(encoded(d.AgentInput)), "opaque fixture") {
+				t.Fatal("diagnostic copied ciphertext")
+			}
+		}
 	}
-	return v
+}
+
+func TestEncryptedAgentHistoryCoexistsWithCatalogAndToolReplay(t *testing.T) {
+	for _, mode := range []string{"native_hit", "native_missing", "external"} {
+		t.Run(mode, func(t *testing.T) {
+			s := fixtureServer()
+			source := agentSourceFixture("spawn_agent")
+			root := message("user", "hello")
+			carrier := object{"type": "additional_tools", "role": "developer", "tools": source["tools"]}
+			delete(source, "tools")
+			source["input"] = []any{root, carrier}
+			seed := mustPlan(t, s, source, 7)
+			args := object{"message": "already delivered fixture"}
+			native := nativeItem("collaboration.spawn_agent", args)
+			response, err := transformResponse(context.Background(), completed(native), seed.tools, seed.store, true)
+			if err != nil {
+				t.Fatal(err)
+			}
+			call := responseToolCalls(response)[0]
+			if mode != "native_hit" {
+				s.host = newFakeHost()
+			}
+			if mode == "external" {
+				call = clone(call)
+				call["id"], call["call_id"] = "fc_legacy", "legacy"
+			}
+			agent := func(text string) object {
+				return object{"type": "agent_message", "author": "/root/worker", "recipient": "/root", "content": []any{object{"type": "encrypted_content", "encrypted_content": text}}}
+			}
+			before, after := agent("before fixture"), agent("after fixture")
+			source["input"] = []any{root, carrier, before, call, object{"type": "function_call_output", "call_id": call["call_id"], "output": "already executed"}, after}
+			original := digest(source)
+			writes := s.host.(*fakeHost).kvWrites
+			d := &replayDiagnostic{}
+			ctx := context.WithValue(context.Background(), replayDiagnosticContextKey{}, d)
+			plan, err := s.prepare(ctx, encoded(source), 7, nil, s.config())
+			if err != nil {
+				t.Fatal(err)
+			}
+			items := plan.body["input"].([]any)
+			if len(items) != 7 || digest(items[3]) != digest(before) || digest(items[6]) != digest(after) || digest(source) != original {
+				t.Fatal("mixed replay changed opaque contents, positions or source history")
+			}
+			replayed := items[4].(object)
+			if str(items[2].(object), "role") != "developer" || items[5].(object)["call_id"] != replayed["call_id"] || s.host.(*fakeHost).kvWrites != writes {
+				t.Fatal("catalog or replay pairing changed, or prepare wrote new tool state")
+			}
+			switch mode {
+			case "native_hit":
+				if d.NativeHits != 1 || digest(replayed) != digest(native) {
+					t.Fatal("native record not preserved", d)
+				}
+			case "native_missing":
+				if d.Missing != 1 || d.Rebuilt != 1 {
+					t.Fatal("missing history was not rebuilt", d)
+				}
+			case "external":
+				if d.Imported != 1 || d.Missing != 0 {
+					t.Fatal("external history was not imported", d)
+				}
+			}
+			if mode != "native_hit" {
+				inner, _, err := decodeRelayEnvelope(replayed)
+				if err != nil || digest(inner["arguments"]) != digest(args) {
+					t.Fatal("rebuilt history changed the delivered arguments", err)
+				}
+			}
+		})
+	}
 }
 
 func TestAgentInspectionBoundedAndReasoningUnaffected(t *testing.T) {

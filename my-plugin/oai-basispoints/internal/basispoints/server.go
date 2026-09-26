@@ -30,6 +30,7 @@ type Probe struct {
 	ResponseID        string             `json:"response_id,omitempty"`
 	Usage             any                `json:"usage,omitempty"`
 	LatencyMS         int64              `json:"latency_ms,omitempty"`
+	StartedAt         int64              `json:"started_at,omitempty"`
 	FinishedAt        int64              `json:"finished_at,omitempty"`
 	Kind              string             `json:"kind,omitempty"`
 	Stage             string             `json:"stage,omitempty"`
@@ -265,7 +266,7 @@ func (s *Server) command(ctx context.Context, cfg Config) (any, error) {
 			err = errors.New("已有探测正在运行")
 		} else {
 			e, _ := effort(c.Effort, cfg.AllowUltra)
-			p := Probe{ID: c.ID, AccountID: c.AccountID, Model: c.Model, Effort: e, Kind: "text", Stage: "identity", State: "running", Message: "正在使用宿主 OAuth 身份探测 BPS"}
+			p := Probe{ID: c.ID, AccountID: c.AccountID, Model: c.Model, Effort: e, Kind: "text", Stage: "identity", State: "running", StartedAt: time.Now().Unix(), Message: "正在使用宿主 OAuth 身份探测 BPS"}
 			if c.Action == "probe_image" || c.Action == "probe_image_route" {
 				p.Kind, p.ImageDetail = "image", c.ImageDetail
 				p.ImageFormat = c.ImageFormat
@@ -288,7 +289,8 @@ func (s *Server) command(ctx context.Context, cfg Config) (any, error) {
 }
 
 // Probes are explicit and may consume quota. Status may include the generated
-// test image and its answer, but never credentials or a raw upstream error body.
+// test image and its answer. Error fields retain upstream text, which may echo
+// input; request headers and complete upstream bodies are not actively copied.
 func (s *Server) runProbe(p Probe, cfg Config) {
 	started := time.Now()
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(min(cfg.TimeoutSeconds, 120))*time.Second)

@@ -11,7 +11,7 @@ import (
 
 const (
 	PluginID    = "local.sub2api.oai-basispoints"
-	Version     = "0.1.17"
+	Version     = "0.1.19"
 	Capability  = "openai.oauth.outbound_transport.v1"
 	bpsURL      = "https://bps.openai.com/basispoints/api/responses"
 	maxBody     = 8 << 20

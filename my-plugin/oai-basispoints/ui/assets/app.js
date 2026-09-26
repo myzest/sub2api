@@ -70,6 +70,8 @@
     const previous=snapshot;snapshot=model.parseJSON(response.result.status_json);
     if(snapshot.host_ready&&(!previous?.host_ready||previous.instance!==snapshot.instance))renderAccounts(selectedAccounts());
     $('runtime').textContent=snapshot.host_ready?'宿主已连接':'等待 HostService v2';
+    $('probe-runtime').textContent=model.diagnosticRuntime(snapshot);
+    $('footer-version').textContent=snapshot.version?`v${snapshot.version}`:'版本未提供';
     $('probe-result').textContent=model.probeText(snapshot.probe);$('probe-result').dataset.state=snapshot.probe?.state||'';
     $('probe-result').setAttribute('aria-busy',String(snapshot.probe?.state==='running'));
     const preview=['image','image_route'].includes(snapshot.probe?.kind)?model.imagePreview(snapshot.probe.image_preview):'';
@@ -107,7 +109,10 @@
     if(!cmd.account_id||!cmd.model)throw new Error('请选择可用账号和模型。');
     await save(cmd);await test(cmd);
     const kind={probe_image:'图片',probe_image_route:'图片路由',probe_tools:'工具',probe:'文本'}[action];
-    notice(`设置已保存，${kind}探测已启动，结果会自动更新；最长等待 120 秒。`);await status();
+    const detail=action==='probe_image_route'?'图片路由历史还会生成关联诊断，请核对结果中的路由诊断 ID。':'来源为“客户端路由”的记录不代表本次探测。';
+    notice(`设置已保存，${kind}探测已启动；探测 ID：${cmd.id}。请查看“单账号探测”结果，最长等待 120 秒；${detail}`);await status();
+    $('probe-result').focus({preventScroll:true});
+    $('probe-result').scrollIntoView({block:'nearest'});
   }
   for(const [id,action] of [['probe','probe'],['probe-image','probe_image'],['probe-image-route','probe_image_route'],['probe-tools','probe_tools']])$(id).addEventListener('click',()=>run(()=>probe(action)));
   for(const id of ['refresh-diagnostic','refresh-image-diagnostic'])$(id).addEventListener('click',()=>run(async()=>{await status();notice('路由诊断与历史已刷新，未发送上游请求。');}));

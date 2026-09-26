@@ -39,7 +39,13 @@
     const kind={text:'文本',image:'图片',image_route:'图片路由',tools:'工具'}[p.kind]||'文本';
     const success={text:'通道可用',image:'图片探测通过',image_route:'图片路由探测通过',tools:'工具回放通过'}[p.kind]||'通道可用';
     const state = {running:'探测中',succeeded:success,failed:'探测失败'}[p.state] || p.state;
-    const lines=[`${kind} · ${state} · 账号 #${p.account_id} · ${p.model} / ${p.effort}`,p.message];
+    const lines=[`${kind} · ${state} · 账号 #${p.account_id} · ${p.model} / ${p.effort}`,`请求来源：插件主动${kind}探测（单账号探测结果）`];
+    if(p.id)lines.push(`探测 ID：${p.id}`);
+    for(const [key,label] of [['started_at','开始时间'],['finished_at','结束时间']]){
+      if(Number.isFinite(p[key])&&p[key]>0)lines.push(`${label}：${new Date(p[key]*1000).toLocaleString('zh-CN',{hour12:false})}`);
+    }
+    if(!p.kind||p.kind==='text')lines.push('输入范围：插件生成的固定短文本；不读取 Codex 会话、子任务消息或客户端工具历史。');
+    lines.push(p.message);
     if(p.stage)lines.push(`阶段：${stageText(p.stage)}${p.round?` · 第 ${p.round} 轮`:''}`);
     lines.push(`Responses HTTP：${p.http_status||'尚未收到响应'}`);
     if(p.content_type)lines.push(`Responses Content-Type：${p.content_type}`);
@@ -172,6 +178,8 @@
     lines.push(`接口：${imageAPI?`/images/${r.image_operation}`:'/responses'}`);
     if(r.version||r.instance)lines.push(`记录插件：${r.version?`v${r.version}`:'版本未提供'} · 实例：${r.instance||'未提供'}`);
     if(r.origin)lines.push(`请求来源：${{route:'客户端路由',image_route_probe:'图片路由探测'}[r.origin]||r.origin}`);
+    if(r.origin==='route')lines.push('记录归属：客户端请求，不是“保存并探测文本”的结果；按钮结果请查看“单账号探测”。');
+    if(r.origin==='image_route_probe')lines.push('记录归属：插件主动图片路由探测；请与“单账号探测”结果中的路由诊断 ID 核对，不是客户端拖图请求。');
     if(r.id)lines.push(`诊断 ID：${r.id}`);
     for(const [key,label] of [['started_at','开始时间'],['finished_at','结束时间']]){
       if(Number.isFinite(r[key])&&r[key]>0)lines.push(`${label}：${new Date(r[key]*1000).toLocaleString('zh-CN',{hour12:false})}`);
@@ -230,7 +238,11 @@
     if(r.agent_input){
       lines.push(`子任务输入：agent_message ${r.agent_input.messages||0} 项 · encrypted_content ${r.agent_input.encrypted_parts||0} 段`);
       for(const path of (r.agent_input.encrypted_paths||[]).slice(0,16))lines.push(`  加密消息位置：${path}（不记录内容）`);
-      if(r.agent_input.encrypted_parts)lines.push('旧子任务加密消息不能猜测解码、删除或改标明文；请从升级后的父任务重新发起委派，不要反复重试旧子任务。');
+      if(r.agent_input.encrypted_parts){
+        if(r.agent_input.handling==='preserved')lines.push('子消息处理：原始加密字段及消息顺序已保留到上游请求；未解密、未改标明文、未删除历史。是否已发送以 Responses 发送阶段为准，解密有效性由上游判断。');
+        else if(r.error_source==='plugin_agent_message')lines.push('历史版本在本地拦截了加密子消息；本条记录不代表 BPS 拒绝，也不能证明消息来自旧任务。升级后可保留会话重试。');
+        else lines.push('已检测到加密子消息；本记录未提供处理结果，不能据字段类型判断消息是否过期或可解密。');
+      }
     }
     const historyTypes=Object.entries(r.history_types||{}).map(([name,count])=>`${name} × ${count}`);
     if(historyTypes.length)lines.push(`历史工具项：${historyTypes.join('，')}`);

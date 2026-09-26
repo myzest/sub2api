@@ -269,12 +269,21 @@ func TestHealthApplyArePassiveAndProbeIsExplicitIdempotent(t *testing.T) {
 	var calls atomic.Int32
 	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls.Add(1)
+		var body object
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		items, _ := body["input"].([]any)
+		if inspectAgentInput(items).Messages != 0 || !strings.Contains(string(encoded(items)), "BPS_OK") {
+			t.Error("text probe used client agent history instead of its fixed prompt")
+		}
 		w.Header().Set("Content-Type", "application/json")
 		w.Write(encoded(completed(terminalText("BPS_OK"))))
 	}))
 	defer up.Close()
 	s := fixtureServer()
 	s.responsesURL = up.URL
+	s.lastRequest = &requestDiagnostic{ID: "unrelated-client-route", Origin: "route", Error: "bps_agent_encrypted_content", ErrorSource: "plugin_agent_message"}
 	cfg := s.config()
 	cfg.Command = &Command{ID: newID(), Instance: s.instance, IssuedAt: time.Now().Unix(), Action: "probe", AccountID: 7, Model: "gpt-5.6-sol", Effort: "low"}
 	for i := 0; i < 3; i++ {
@@ -298,6 +307,9 @@ func TestHealthApplyArePassiveAndProbeIsExplicitIdempotent(t *testing.T) {
 		if snapshot.Probe != nil && snapshot.Probe.State != "running" {
 			if snapshot.Probe.State != "succeeded" || calls.Load() != 1 || strings.Contains(r.StatusJson, "fixture-secret-token") {
 				t.Fatal(r)
+			}
+			if snapshot.Probe.ID != cfg.Command.ID || snapshot.Probe.StartedAt == 0 || snapshot.Probe.FinishedAt < snapshot.Probe.StartedAt || snapshot.LastRequest == nil || snapshot.LastRequest.ID != "unrelated-client-route" || snapshot.LastRequest.Error != "bps_agent_encrypted_content" {
+				t.Fatal("probe attribution or independent route record changed")
 			}
 			return
 		}

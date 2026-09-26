@@ -90,9 +90,10 @@ func summarizeImages(source object) ([]imageDiagnostic, int) {
 				walk(item, fmt.Sprintf("%s[%d]", path, index))
 			}
 		case object:
-			if str(v, "type") == "additional_tools" {
+			switch strings.ToLower(strings.TrimSpace(str(v, "type"))) {
+			case "additional_tools", "encrypted_content":
 				return
-			} // Tool schema examples are not input pictures.
+			} // Neither tool schema examples nor opaque encrypted parts are input pictures.
 			add(v, path)
 			keys := make([]string, 0, len(v))
 			for key := range v {

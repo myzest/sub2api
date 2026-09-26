@@ -37,3 +37,8 @@ Reviewed ranxi2001/sub2api production at f671a8d30c34706d8526accadf6a6ad5f40f855
 ## Version 0.1.17 collaboration message reference
 
 The same ranxi2001/sub2api commit f671a8d30c34706d8526accadf6a6ad5f40f855e already sets an explicit empty encrypted_function_args list for plaintext relay function calls in tools.go, preserves direct-call encryption metadata, and tests collaboration messages in agent_message_test.go. Those previously omitted behaviors informed this fix. Its content.go and agent-message fixtures inform a narrowly scoped rejection of opaque encrypted_content in agent_message, without interpreting ciphertext or deleting reasoning/compaction state. The retained LGPL-3.0 and origin notice above apply. New diagnostics contain only marker states, counts and protocol paths; no client collaboration tool is executed by this adapter.
+
+
+## Version 0.1.18 opaque agent input preservation
+
+Re-reviewed Kaixxrua/excel-codex-bridge origin HEAD at 8a277dfcdbb647d2ef4d714e31b6a98260a63a79 on 2026-09-26, specifically excel_upstream.py::translate_input_items, alongside the existing CPA 708082da2f851569984de395d25405e61c2bbc34 snapshot. Both retain ordinary input items rather than locally rejecting agent_message encrypted content. This version restores that behavior and removes the rejection introduced in 0.1.17. The ranxi-based plaintext function argument marker remains; source licenses and notices above continue to apply. No ciphertext decryption, retyping or implicit history removal is implemented.

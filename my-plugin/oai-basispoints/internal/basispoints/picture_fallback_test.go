@@ -23,6 +23,56 @@ func pictureRequest() object {
 	return source
 }
 
+// A synthetic extension with an image-shaped object is deliberately not
+// evidence of a supported BPS encrypted payload; the adapter must leave it alone.
+func TestEncryptedPartsRemainOpaqueToPictureHandling(t *testing.T) {
+	var uploads atomic.Int32
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		uploads.Add(1)
+		if r.URL.Path != "/attachments" {
+			t.Error("unexpected request outside attachment fixture")
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"openai_file_id":"file_visible_picture"}`))
+	}))
+	defer up.Close()
+	s := fixtureServer()
+	routeFixture(s, up.URL+"/responses")
+	opaque := object{"type": "encrypted_content", "encrypted_content": "opaque fixture",
+		"extension": object{"nested": []any{fixturePicture("not an input picture")}}}
+	source := pictureRequest()
+	source["input"] = []any{object{"type": "agent_message", "content": []any{
+		object{"type": "input_text", "text": "prefix"}, opaque, fixturePicture("visible picture"),
+	}}}
+	before := digest(source)
+	if _, count := summarizeImages(source); count != 1 {
+		t.Fatal("opaque extension counted as an input picture", count)
+	}
+	plan := mustPlan(t, s, source, 7)
+	headers, _ := bpsHeaders(headersFromProto(bpsStart(encoded(source)).Headers))
+	pictures := s.newPictureFallback(plan, headers, "")
+	pictures.refused["agent_message"] = true
+	for _, omit := range []bool{false, true} {
+		pictures.omit = omit
+		if err := pictures.rewrite(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		items := plan.body["input"].([]any)
+		parts := items[len(items)-1].(object)["content"].([]any)
+		if digest(parts[1]) != digest(opaque) || digest(source) != before || uploads.Load() != 1 {
+			t.Fatal("opaque content changed or triggered attachment handling")
+		}
+		images, count := summarizeImages(plan.body)
+		if omit {
+			if pictures.omitted != 1 || count != 0 {
+				t.Fatal("image fallback interpreted opaque contents")
+			}
+		} else if count != 1 || images[0].Source != "file_id" {
+			t.Fatal("ordinary sibling image no longer follows attachment handling")
+		}
+	}
+}
+
 func TestPictureRefusalRefreshesOnlyOldCacheThenExplicitlyOmits(t *testing.T) {
 	for _, status := range []int{400, 422} {
 		t.Run(fmt.Sprint(status), func(t *testing.T) {
