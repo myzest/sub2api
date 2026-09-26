@@ -1,4 +1,6 @@
-# 字段处理与源码依据（0.1.14）
+# 字段处理与源码依据（0.1.15）
+
+0.1.15 依据 ranxi2001/sub2api `f671a8d30c34706d8526accadf6a6ad5f40f855e` 新增显式 CUSTOM/FUNCTION_CODE 原文传输，并将完整响应的信封错误收尾为带 ID 的 response.failed；没有自动模型纠正或额外上游请求。源码函数对照、两条路由及未移植范围见 [HOST_INTEGRATION.md](HOST_INTEGRATION.md)。以下历史版本说明仍保留；新调用优先原文模式，旧 JSON 信封继续兼容。
 
 这里的“有依据”指参考仓库已实现该行为，不代表本插件已在用户桌面端或 BPS 实机验证。用户已要求自行验收，本次不运行测试或探测。
 
@@ -6,7 +8,7 @@
 
 ## 固定参考版本
 
-- 本轮复核的 HEAD：CPA `708082da2f851569984de395d25405e61c2bbc34`（v0.1.9），Excel bridge `66c41df941fb1a963801964c75ff24b4a19e93f2`（0.4.6）。Images 接口依据见“0.1.12”；0.1.13 按该 Excel 提交补齐 Responses 工具、流式及图片容错。完整函数对照、未照搬的历史行为及宿主边界见 [COMPATIBILITY.md](COMPATIBILITY.md)。
+- 0.1.12/0.1.13 当时复核的 HEAD：CPA `708082da2f851569984de395d25405e61c2bbc34`（v0.1.9），Excel bridge `66c41df941fb1a963801964c75ff24b4a19e93f2`（0.4.6）。Images 接口依据见“0.1.12”；0.1.13 按该 Excel 提交补齐 Responses 工具、流式及图片容错。完整函数对照、未照搬的历史行为及宿主边界见 [COMPATIBILITY.md](COMPATIBILITY.md)。
 - CPA：[`f4a2563`](https://github.com/JaxsonWang/cpa-plugin-oai-basispoints/tree/f4a2563647f807f5bc08e725fa933bcba28d2d11)，v0.1.8，MIT；用于本版附件上传、工具限制和回放、上下文配置修正。许可证随包附带。
 - Excel bridge：[`b2d6f25`](https://github.com/Kaixxrua/excel-codex-bridge/tree/b2d6f2529b6ffa9f1a630f17b7037ef6dcc0480a)，Unlicense；其 images.py 采用可抓取图片 URL，本插件选择 CPA 的同源附件方案，不引入临时公网图床或静默删图。
 - Codex additional_tools：依据 [OpenAI 官方工具搜索文档](https://developers.openai.com/api/docs/guides/tools-tool-search#add-tools-at-a-specific-point-in-the-input)、[本工作区宿主 Lite 转换](../../backend/internal/service/openai_responses_lite_tools.go)及 [EffectiveResponsesTools / custom exec 适配](../../backend/internal/pkg/apicompat/chatcompletions_responses_bridge.go)。两个参考的上述提交均仅收集顶层 tools，本版额外适配的是客户端/宿主入口，不宣称 BPS 原生支持该载体。

@@ -1,4 +1,6 @@
-# Excel bridge 容错对照（0.1.14）
+# Excel bridge 容错对照（0.1.15）
+
+0.1.15 依据 ranxi2001/sub2api `f671a8d30c34706d8526accadf6a6ad5f40f855e` 新增显式 CUSTOM/FUNCTION_CODE 原文传输，并将完整响应的信封错误收尾为带 ID 的 response.failed；没有自动模型纠正或额外上游请求。源码函数对照、两条路由及未移植范围见 [HOST_INTEGRATION.md](HOST_INTEGRATION.md)。以下历史版本说明仍保留；新调用优先原文模式，旧 JSON 信封继续兼容。
 
 参考固定为 [Excel bridge 0.4.6 / 66c41df](https://github.com/Kaixxrua/excel-codex-bridge/tree/66c41df941fb1a963801964c75ff24b4a19e93f2)，并与此前 `b2d6f25` 对照。另保留 CPA `708082d` 的附件、回放和工具约束依据。此表覆盖与本插件请求链路有关的容错；Python 启动器、Excel 登录和 Windows 凭据存储不移植到服务端 transport 插件。
 

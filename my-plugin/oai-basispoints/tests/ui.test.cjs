@@ -5,6 +5,13 @@ const vm=require('node:vm');
 const crypto=require('node:crypto').webcrypto;
 const model=require('../ui/assets/model.js');
 
+test('marked relay diagnostics distinguish raw code from metadata JSON',()=>{
+  const text=model.requestText({relay:[{state:'decoded',unwrapped:0,transport:'custom',fields:[{field:'code',type:'string',bytes:2350}]},{state:'rejected',unwrapped:0,transport:'function_code',error_kind:'duplicate_code',fields:[]}],terminal:'response.failed',error:'bps_tool_envelope_invalid',error_source:'tool_relay'});
+  assert.match(text,/CUSTOM 原文/);assert.match(text,/FUNCTION_CODE 原文/);
+  assert.match(text,/解析记录 2/);assert.match(text,/response.failed/);
+  assert.doesNotMatch(text,/重试成功|已执行工具/);
+});
+
 test('imported config removes persisted action and defaults to no routing',()=>{
   const c=model.config({command:{action:'probe'}});
   assert.equal(c.route_enabled,false);assert.deepEqual(c.account_ids,[]);assert.equal(c.command,undefined);

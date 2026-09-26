@@ -112,7 +112,7 @@ func normalizeNativePlan(args object) object {
 	return result
 }
 
-const transportRetryGuidance = "The previous run_officejs relay was rejected because its transport envelope was malformed. Retry once with exactly one outer run_officejs call. Its code field is JSON text, not JavaScript or OfficeJS, and must contain one catalog-tool object; do not put another run_officejs wrapper inside it. Serialize the inner JSON before placing it in code, including any backslashes or quotes in shell commands, and do not repeat the identical payload."
+const transportRetryGuidance = "The previous run_officejs relay was rejected. Retry once using exactly the transport documented for the intended catalog tool: FUNCTION uses one JSON name/arguments envelope; CUSTOM uses the codex2api.custom/CATALOG_NAME summary and exact raw input in code; FUNCTION_CODE uses its codex2api.function_code/CATALOG_NAME summary, exact code and other arguments as JSON in extended_summary. Serialize outer arguments correctly. Do not nest run_officejs, repeat an identical rejected payload, or change the intended tool arguments."
 
 func normalizeNativeToolOutput(native object, output any) any {
 	if str(native, "name") == "update_plan" {

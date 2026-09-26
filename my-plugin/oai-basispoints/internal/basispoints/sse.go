@@ -13,22 +13,25 @@ import (
 
 type eventWriter func([]byte) error
 type relay struct {
-	ctx        context.Context
-	plan       *requestPlan
-	emit       eventWriter
-	sequence   int
-	seen       map[int]object
-	done       map[int]object
-	response   object
-	terminal   string
-	observe    func(object) // Observer applies its own bounded diagnostic projection.
-	started    object
-	holdFrom   int
-	pending    []object
-	keepalives int
-	recovered  bool
-	unfinished map[int]bool
-	unindexed  bool // Output activity without a reliable index cannot prove completion.
+	ctx              context.Context
+	plan             *requestPlan
+	emit             eventWriter
+	sequence         int
+	seen             map[int]object
+	done             map[int]object
+	response         object
+	terminal         string
+	observe          func(object) // Observer applies its own bounded diagnostic projection.
+	started          object
+	holdFrom         int
+	pending          []object
+	keepalives       int
+	recovered        bool
+	unfinished       map[int]bool
+	unindexed        bool // Output activity without a reliable index cannot prove completion.
+	conversionFailed bool
+	rawTerminal      object
+	localError       object
 }
 
 func newRelay(ctx context.Context, plan *requestPlan, emit eventWriter) *relay {
@@ -166,6 +169,9 @@ func (r *relay) finish(event object, raw object) error {
 	if str(raw, "status") != status {
 		return errors.New("BPS 终态事件与 response.status 不一致")
 	}
+	if id := str(r.started, "id"); id != "" && str(raw, "id") != id {
+		return errors.New("BPS 终态 response ID 与开始事件不一致")
+	}
 	output, ok := raw["output"].([]any)
 	if !ok || len(output) > 1024 {
 		return errors.New("BPS 终态 output 无效")
@@ -187,8 +193,10 @@ func (r *relay) finish(event object, raw object) error {
 			}
 		}
 	}
+	r.rawTerminal = raw
 	result, err := transformResponse(r.ctx, raw, r.plan.tools, r.plan.store, status == "completed")
 	if err != nil {
+		r.conversionFailed = true
 		return err
 	}
 	// Skipping unconvertible or serial-only extra tools changes output indexes.
@@ -205,6 +213,9 @@ func (r *relay) finish(event object, raw object) error {
 	r.pending = nil
 	if status == "failed" {
 		result["error"] = object{"code": "bps_response_failed", "message": "BPS 返回 response.failed；未完成响应"}
+		if r.localError != nil {
+			result["error"] = clone(r.localError)
+		}
 	}
 	if status == "incomplete" {
 		delete(result, "error")
@@ -242,6 +253,24 @@ func (r *relay) finish(event object, raw object) error {
 	r.response, r.terminal = result, name
 	return nil
 }
+
+// End a verified but unconvertible response as failed instead of closing the
+// transport pipe. Never release a bad tool or turn a partial stream into success.
+func (r *relay) failEnvelope(diagnosticID string) error {
+	if !r.conversionFailed || r.rawTerminal == nil || str(r.rawTerminal, "id") == "" {
+		return errors.New("尚未收到可安全收尾的工具终态")
+	}
+	// The host's openAIStreamFailedEventShouldFailover treats unclassified
+	// failed events as retryable before semantic output. Use its established
+	// deterministic-protocol-error class, not a capacity/server-error marker.
+	// The code/message still identify BPS output, NOT the user's input.
+	r.localError = object{"code": "bps_tool_envelope_invalid", "type": "invalid_request_error", "message": "BPS 输出的工具信封未通过校验（不是客户端输入格式错误）；本轮工具未释放、未执行。请查看插件信封诊断；诊断 ID：" + diagnosticID}
+	raw := clone(r.rawTerminal)
+	raw["status"] = "failed"
+	delete(raw, "incomplete_details")
+	return r.finish(object{"type": "response.failed"}, raw)
+}
+
 func (r *relay) emitTool(item object, index int) error {
 	key, prefix := "arguments", "response.function_call_arguments"
 	if str(item, "type") == "custom_tool_call" {
@@ -327,6 +356,7 @@ func (r *relay) consume(resp *http.Response) error {
 		initial["output"], initial["status"] = []any{}, "in_progress"
 		delete(initial, "usage")
 		delete(initial, "error")
+		r.started = clone(initial)
 		if err := r.send(object{"type": "response.created", "response": initial}); err != nil {
 			return err
 		}

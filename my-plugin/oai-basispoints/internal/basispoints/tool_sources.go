@@ -58,7 +58,7 @@ func (c *toolCatalog) inputWithCatalogs(input []any) []any {
 		entries := c.entriesAt[index]
 		text := "No additional client tools are enabled at this position for this turn."
 		if len(entries) > 0 {
-			text = "Additional client tools become available at this point in the conversation. Use these exact catalog names through the run_officejs relay described above; they execute in the external client's environment.\nClient tool catalog:\n" + string(encoded(entries))
+			text = "Additional client tools become available at this point in the conversation. Use these exact catalog names through the run_officejs relay described above; they execute in the external client's environment.\nClient tool catalog:\n" + relayCatalog(entries)
 		}
 		// Consume the private carrier. Leaving it intact would also expose
 		// native declarations to BPS outside our validated relay/KV path.

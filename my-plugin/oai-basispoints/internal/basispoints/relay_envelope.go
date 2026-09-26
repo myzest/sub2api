@@ -23,12 +23,17 @@ type relayFieldDiagnostic struct {
 
 type relayDiagnostic struct {
 	State     string                 `json:"state"`
+	Transport string                 `json:"transport,omitempty"`
 	Unwrapped int                    `json:"unwrapped"`
 	Fields    []relayFieldDiagnostic `json:"fields"`
 	ErrorKind string                 `json:"error_kind,omitempty"`
 }
 
-type relayDecodeError struct{ kind string }
+type relayDecodeError struct {
+	kind   string
+	field  string
+	offset int64
+}
 
 func (e *relayDecodeError) Error() string {
 	return fmt.Sprintf("工具信封解析失败（%s）；需要完整、无歧义的单个 JSON 对象；详见工具信封诊断", e.kind)
@@ -42,7 +47,7 @@ func relayJSON(value any, field string, layer int, allowFence bool) (object, rel
 	d := relayFieldDiagnostic{Layer: layer, Field: field, Type: "other"}
 	fail := func(kind string, offset int64) (object, relayFieldDiagnostic, error) {
 		d.ErrorKind, d.ErrorOffset = kind, offset
-		return nil, d, &relayDecodeError{kind: kind}
+		return nil, d, &relayDecodeError{kind: kind, field: field, offset: offset}
 	}
 	switch v := value.(type) {
 	case object:
@@ -242,6 +247,12 @@ func decodeRelayEnvelope(native object) (object, relayDiagnostic, error) {
 		return nil, d, &relayDecodeError{kind: d.ErrorKind}
 	}
 	for {
+		if inner, marked, err := markedRelayEnvelope(args, &d); marked {
+			if err == nil {
+				d.State = "decoded"
+			}
+			return inner, d, err
+		}
 		inner, err := read(args["code"], "code", d.Unwrapped, true)
 		if err != nil {
 			return nil, d, err

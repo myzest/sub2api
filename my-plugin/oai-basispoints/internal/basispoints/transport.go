@@ -280,6 +280,15 @@ func (s *Server) Forward(stream pluginv1.TransportPlugin_ForwardServer) (result 
 		d.Keepalives += relay.keepalives
 		d.CompletionRecovered = relay.recovered
 		d.SkippedTools = plan.tools.skippedTools
+		// A verified response with an invalid relay is a protocol failure, not
+		// a broken HTTP connection. Keep the stream valid and retain its ID.
+		var envelopeErr *relayDecodeError
+		if consumeErr != nil && relay.conversionFailed && ctx.Err() == nil &&
+			errors.As(consumeErr, &envelopeErr) {
+			d.ErrorSource = "tool_relay"
+			d.Error = "bps_tool_envelope_invalid: " + limitCharacters(consumeErr.Error(), 1000)
+			consumeErr = relay.failEnvelope(d.ID)
+		}
 		if err := consumeErr; err != nil {
 			if !plan.stream && d.ProtocolRetries == 0 && ctx.Err() == nil && protocolInterruption(err) {
 				d.ProtocolRetries++
@@ -287,7 +296,9 @@ func (s *Server) Forward(stream pluginv1.TransportPlugin_ForwardServer) (result 
 				resp.Body.Close()
 				continue
 			}
-			d.ErrorSource = "response_conversion"
+			if d.ErrorSource == "" {
+				d.ErrorSource = "response_conversion"
+			}
 			var decodeErr *relayDecodeError
 			if errors.As(err, &decodeErr) {
 				d.ErrorSource = "tool_relay"
@@ -301,7 +312,7 @@ func (s *Server) Forward(stream pluginv1.TransportPlugin_ForwardServer) (result 
 		d.output(relay.response)
 		if relay.terminal == "response.completed" {
 			d.Stage = "completed"
-		} else {
+		} else if d.Error == "" {
 			d.Error = "BPS 返回 " + relay.terminal
 			d.ErrorSource = "upstream_response"
 		}

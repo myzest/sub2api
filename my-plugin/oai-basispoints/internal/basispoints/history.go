@@ -86,13 +86,17 @@ func historicalTransportCall(item object) (object, error) {
 			return native, nil
 		}
 	}
+	arguments := object{
+		"summary": "Run client tool " + name, "extended_summary": "Relay " + name + " through the external client",
+		"code": string(encoded(inner)), "destructive": false, "references": []any{},
+	}
+	if str(item, "type") == "custom_tool_call" && rawTransportName(name) {
+		arguments["summary"], arguments["code"] = rawCustomPrefix+name, inner["input"]
+	}
 	return object{
 		"type": "function_call", "id": functionItemID(handle), "call_id": handle,
 		"name": "run_officejs", "status": "completed",
-		"arguments": string(encoded(object{
-			"summary": "Run client tool " + name, "extended_summary": "Relay " + name + " through the external client",
-			"code": string(encoded(inner)), "destructive": false, "references": []any{},
-		})),
+		"arguments": string(encoded(arguments)),
 	}, nil
 }
 

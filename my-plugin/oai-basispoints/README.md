@@ -2,14 +2,14 @@
 
 独立的 Sub2API `.s2plugin` 插件，使用已有 OpenAI OAuth 账号，将选定账号的 Responses 请求转换为 BPS 协议。源码和生成文件都在此目录；不需要二改 Sub2API 主程序。
 
-这是 **0.1.14 客户端工具回传与预览诊断版本**。新增转换后的工具名称、客户端返回的有限机器状态，并补充执行器嵌套工具及预览状态指引。保留 0.1.13 依据 Excel bridge `66c41df`（0.4.6）补齐的信封、流式与图片容错，以及 0.1.12 独立生图/改图接口。逐项移植与保留边界见 [COMPATIBILITY.md](COMPATIBILITY.md)，字段依据见 [FIELD_MAPPING.md](FIELD_MAPPING.md)，交付及用户验收清单见 [VALIDATION.md](VALIDATION.md)。本轮只编译和打包，未运行功能测试或真实账号请求；尚不能确认用户报告的预览失败根因。
+这是 **0.1.15 原文工具传输与失败终态版本**。依据用户指定的 ranxi2001/sub2api `f671a8d`，新增 CUSTOM / FUNCTION_CODE 显式原文传输，减少长脚本嵌套 JSON 的转义错误；完整响应的信封解析失败改为带诊断 ID 的 response.failed，不再主动关闭传输管道。旧信封、回放和图像功能保留。没有新增模型纠正请求，不修改宿主或客户端配置；仅编译、打包，未运行功能测试或真实账号请求。务必先读 [HOST_INTEGRATION.md](HOST_INTEGRATION.md) 区分宿主原生 Excel 与插件路径。
 
 ## 安装
 
 适用宿主：本工作区对应 fork 的插件机制，Plugin Protocol / Transport API / UI Bridge v1，**HostService v2**。清单声明 `>=0.2.8 <0.3.0`，版本号本身不能替代这些接口要求；没有在你的服务器镜像上验收。
 
 1. 将 `dist/trusted-publisher.yaml` 中公钥条目合并到服务器已有配置的 `plugins.trusted_publishers`，保留其他发布者，保持 `allow_unsigned: false`。首次添加公钥后重启 Sub2API。
-2. 在插件管理中导入 `dist/oai-basispoints-0.1.14.s2plugin`。包内包含 Linux amd64、Linux arm64、macOS arm64 运行文件。Windows 上运行 Codex 客户端不要求服务端插件也有 Windows 运行文件。
+2. 在插件管理中导入 `dist/oai-basispoints-0.1.15.s2plugin`。包内包含 Linux amd64、Linux arm64、macOS arm64 运行文件。Windows 上运行 Codex 客户端不要求服务端插件也有 Windows 运行文件。
 3. 启用本插件。如果已有 OpenAI OAuth 出站插件处于启用状态，先停用它：宿主的 `openai.oauth.outbound_transport.v1` 只有一个启用槽位，不能与 GPT Inspector 同时占用。
 4. 将宿主此插件能力的灰度比例设为 **100%**，再通过本插件的账号白名单控制 BPS 路由。比例低于 100% 时，部分选定账号可能根本到不了插件。
 5. 打开插件设置，刷新账号。在保持 BPS 路由关闭的情况下，选一个账号、模型和 effort，点击“保存并探测文本”。图片、工具探测也在这里；每项总共最多等待 120 秒，只有点击探测才发上游请求。
@@ -156,7 +156,7 @@
 
 最新 [Excel bridge 0.4.6](https://github.com/Kaixxrua/excel-codex-bridge/tree/66c41df941fb1a963801964c75ff24b4a19e93f2) 补齐了此前固定参考版本没有的实现：Codex 客户端通过 provider 的 `x-openai-actor-authorization` 头启用本地 `image_gen.imagegen`，执行器向 provider 的 `/images/generations`、`/images/edits` 发送独立请求。这与 Responses 的 hosted `image_generation` 是两条不同链路。0.1.11 的“尚未接入”结论仅代表当时版本；0.1.12 已按新参考移植独立接口。
 
-1. 先在服务器停用旧版、导入并启用 0.1.14，保持 BPS 账号白名单。账号所属分组必须允许生图，并能将 `gpt-image-2` 调度到选中的 BPS OAuth 账号；不要把这个图片模型映射成文字模型。插件“允许的模型”是 Responses 文字模型列表，无需为生图追加 `gpt-image-2`。宿主账号的图片工具策略应选择“继承/允许”，不能为“拦截”。
+1. 先在服务器停用旧版、导入并启用 0.1.15，保持 BPS 账号白名单。账号所属分组必须允许生图，并能将 `gpt-image-2` 调度到选中的 BPS OAuth 账号；不要把这个图片模型映射成文字模型。插件“允许的模型”是 Responses 文字模型列表，无需为生图追加 `gpt-image-2`。宿主账号的图片工具策略应选择“继承/允许”，不能为“拦截”。
 2. 修改发起任务的那台电脑的 Codex provider 配置。Windows 为 `%USERPROFILE%\.codex\config.toml`，macOS 为 `~/.codex/config.toml`。在当前 provider 表中合并下面一行；`custom` 应与文件中的 `model_provider` 值一致，保留原 `base_url`、鉴权及其他请求头，不要重复创建同名表或重复键。完整说明见 [codex-imagegen.example.toml](codex-imagegen.example.toml)。
 
    ```toml

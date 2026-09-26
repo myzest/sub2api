@@ -16,7 +16,8 @@
     if(!Array.isArray(relays)||!relays.length)return [];
     const lines=['工具信封诊断（最多 16 项；不含参数正文）：'];
     for(const [i,r] of relays.slice(0,16).entries()){
-      lines.push(`  调用 ${i+1}：${r.state==='decoded'?'JSON 已解码，后续仍需工具校验':'解析失败'} · 解开重复信封 ${r.unwrapped||0} 层${r.error_kind?` · ${r.error_kind}`:''}`);
+      lines.push(`  解析记录 ${i+1}：${r.state==='decoded'?(r.transport?'传输已解析，后续仍需工具校验':'JSON 已解码，后续仍需工具校验'):'解析失败'} · 解开重复信封 ${r.unwrapped||0} 层${r.error_kind?` · ${r.error_kind}`:''}`);
+      if(r.transport)lines.push(`    传输：${{custom:'CUSTOM 原文（code 不作 JSON 解码）',function_code:'FUNCTION_CODE 原文＋元数据 JSON'}[r.transport]||r.transport}`);
       for(const f of (r.fields||[]).slice(0,6)){
         lines.push(`    层 ${f.layer} · ${f.field} · ${f.type} · ${f.bytes||0} bytes${f.extracted?' · 已提取完整 JSON 对象':f.fenced?' · 已去除 JSON 围栏':''}${f.backslashes_repaired?` · 反斜杠兼容 ${f.backslashes_repaired} 处`:''}${f.error_kind?` · ${f.error_kind}`:''}${f.error_offset?` · ${f.backslashes_repaired?'兼容后':'解码内容'}字节偏移 ${f.error_offset}`:''}`);
       }

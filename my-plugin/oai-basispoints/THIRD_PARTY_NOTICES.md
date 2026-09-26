@@ -28,3 +28,7 @@ Direct Go dependencies include HashiCorp go-plugin (MPL-2.0), go-hclog (MIT), gR
 Playwright (Apache-2.0) is a development-only UI test dependency, recorded in `package-lock.json`; it is not part of the runtime package.
 
 This is a local Sub2API transport adapter, not an official OpenAI integration. Repository descriptions of model quality are hypotheses to evaluate against runtime results, not guarantees provided by this package.
+
+## Version 0.1.15 host protocol reference
+
+Reviewed ranxi2001/sub2api production at f671a8d30c34706d8526accadf6a6ad5f40f855e (2026-09-26). Its backend/internal/service/basispoints/custom_transport.go, function_code_transport.go, catalog.go and stream.go informed the marked raw-text transport and explicit protocol-failure terminal. The source package's attribution is retained in licenses/ranxi-sub2api-basispoints.NOTICE.md. The repository is LGPL-3.0; that notice credits hloolx/codex2api's MIT-origin protocol port. This adapter retains its own strict decoder, schema validation, persistent scoped replay and image transport. It does not import host account settings, the image URL server or automatic model retries.
