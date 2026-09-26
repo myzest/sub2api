@@ -281,10 +281,9 @@ func (s *Server) uploadImage(ctx context.Context, endpoint string, headers http.
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		// A missing/oversized error body must not turn an observed HTTP
 		// rejection into an uncertain transport error in the host scheduler.
-		// Use the production error projection, including URL, quoted-value
-		// and opaque-value redaction. Cover both original and decoded encodings.
-		request := object{"input": []any{dataURL, base64.StdEncoding.EncodeToString(data)}}
-		report.Diagnostic, report.DiagnosticState = readUpstreamDiagnostic(resp.Body, headers, nil, request)
+		// Retain bounded upstream error fields verbatim as requested. Do not
+		// add image data or request headers to the diagnostic.
+		report.Diagnostic, report.DiagnosticState = readUpstreamDiagnostic(resp.Body)
 		return "", &attachmentError{status: resp.StatusCode, code: "bps_attachment_http", text: fmt.Sprintf("BPS 图片上传返回 HTTP %d；尚未发送识图请求", resp.StatusCode), sent: true, headers: responseHeaders(resp.Header)}
 	}
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, (64<<10)+1))

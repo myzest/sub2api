@@ -206,8 +206,8 @@ func (s *Server) forwardImages(ctx context.Context, w *forwardWriter, start *plu
 	d.RequestID = redactProbeText(response.Header.Get("X-Request-Id"), headers, "")
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		d.ErrorSource = "upstream_http"
-		d.UpstreamError, d.UpstreamErrorState = readUpstreamDiagnostic(response.Body, headers, raw, source)
-		message := fmt.Sprintf("BPS 图片接口返回 HTTP %d；请查看诊断中的脱敏上游原因", response.StatusCode)
+		d.UpstreamError, d.UpstreamErrorState = readUpstreamDiagnostic(response.Body)
+		message := fmt.Sprintf("BPS 图片接口返回 HTTP %d；请查看诊断中的上游错误原文", response.StatusCode)
 		return w.json(response.StatusCode, object{"error": object{"type": "bps_upstream_error", "code": fmt.Sprintf("bps_image_http_%d", response.StatusCode), "message": message}}, responseHeaders(response.Header))
 	}
 	d.Stage = "response"
@@ -232,7 +232,7 @@ func (s *Server) forwardImages(ctx context.Context, w *forwardWriter, start *plu
 	if payload["error"] != nil {
 		d.Stage, d.Terminal, d.ErrorSource = "response", "images.failed", "upstream_response"
 		d.Error = "bps_image_response: HTTP 200 的 Images JSON 包含 error；宿主将按错误处理"
-		d.UpstreamError, d.UpstreamErrorState = readUpstreamDiagnostic(bytes.NewReader(data), headers, raw, source)
+		d.UpstreamError, d.UpstreamErrorState = readUpstreamDiagnostic(bytes.NewReader(data))
 	} else if d.GeneratedImages == 0 {
 		// The host's parseCodexDirectImagesResponse only accepts b64_json.
 		// A URL-only/empty JSON cannot be marked completed in diagnostics.

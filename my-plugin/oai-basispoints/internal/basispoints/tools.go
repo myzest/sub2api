@@ -345,6 +345,7 @@ func transformResponse(ctx context.Context, response object, catalog *toolCatalo
 		switch str(item, "type") {
 		case "function_call", "custom_tool_call":
 			if !success {
+				catalog.skippedTools++
 				continue
 			}
 			if callIDs[str(item, "call_id")] || itemIDs[str(item, "id")] {

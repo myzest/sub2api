@@ -110,7 +110,7 @@
 | 公共字段 | prompt 原字符串；model 固定 gpt-image-2；output_format 固定 png；background/quality/size 缺省 auto；可选 n 为 1..3 的整数；支持列表与参考 _fields 相同 |
 | 身份与代理 | 复用宿主 OAuth、ChatGPT account ID、账号代理，Accept=application/json。provider 的 actor 标记不进入 BPS headers，也不代替 Authorization |
 | 响应 | 有界 JSON 对象返回给宿主，保留 data、b64_json、usage 和扩展字段；HTTP 错误保留状态及 Retry-After，插件自身不自动重试；宿主的调度及回退策略保持原样 |
-| 诊断 | image_operation、generated_images、upstream_started；生图即使没有输入图片也进入图片历史。只记录数量、字段摘要与状态；错误脱敏覆盖 prompt/images/mask |
+| 诊断 | image_operation、generated_images、upstream_started；生图即使没有输入图片也进入图片历史。记录数量、字段摘要与状态；0.1.16 起按用户要求保留有界错误原文，可能含上游输入回显，不主动复制 prompt/images/mask |
 
 本地边界与参考不同处：沿用插件 8 MiB 请求、32 MiB 响应限制，要求有效无重复键 JSON，仅接受既有 JPEG/PNG/GIF/WebP MIME；参考虽未传递 stream/mask，本版明确拒绝其显式使用，避免执行与原请求不同的操作。其他未列出的字段不发送，不扩展透明背景、图片模型、尺寸、URL 下载等未经新参考实现的行为。宿主先于插件处理图片权限、模型映射与账号调度；插件无法恢复宿主已经丢失或改写的字段。
 
@@ -139,6 +139,19 @@
 - `sameCall` 原先使用 `str` 比较 custom input，导致空字符串与缺失/null/错误类型相等；现在要求两侧都为原始字符串。对象、数组、数字等错误类型的 namespace 不再静默退化为无 namespace。
 - `replayHandleKind` 原先只剥一个前缀，`call_ctc_bp_…` 可被当作外部历史；现在仅为识别保留标记而逐层剥离已知前缀，并将其判为无效插件句柄，不增加可加载的 KV ID 格式。
 - `attachmentReport` 的 HTTP 字段原先跨图片共用且未在新尝试前清空；现在逐次重置，记录尝试次数与逐图 HTTP。UI 将汇总字段标为最近一次上传尝试，区分全缓存命中和后续上传未收到 HTTP 响应。
-- 附件非 2xx 改用 `readUpstreamDiagnostic`，与 Responses 共用大小上限、已知请求值/引号内容/URL/不透明串脱敏和采集状态。保留上传状态及限流响应头，不把诊断读取失败改判为未知网络错误。
+- 附件非 2xx 改用 `readUpstreamDiagnostic`，与 Responses 共用大小上限和采集状态；旧版替换已知请求值/引号内容/URL/不透明串，0.1.16 起按用户要求保留错误字符串原文。保留上传状态及限流响应头，不把诊断读取失败改判为未知网络错误。
 
 以上是 0.1.9 当时的审查范围；当时未加入图片重试或工具结果图片上传。0.1.13 依据新 Excel images.py 扩展这些路径，见当前表格及 COMPATIBILITY.md。原生搜索/计算机/MCP/tool_search、独立 compact/input_tokens 和凭据交换仍不在已实现范围。
+
+
+## 0.1.16 错误事件映射
+
+| 上游输入 | 插件/客户端输出 | 诊断 |
+| --- | --- | --- |
+| SSE `error` / `response.error` | 标准 `error` 事件，保留 flat 或 nested 错误形态、已知错误码和 message/param；重新连续编号，随后正常 End，不伪造 response ID/usage/completed | `upstream_stream`、原始事件类型、`captured_raw` 和有界原文字段 |
+| `response.failed` | 保留真实 response ID/usage，上游 error 已知字段代替旧通用消息；未完成工具不释放 | SSE 为 `upstream_stream`，JSON 为 `upstream_response` |
+| HTTP 200 JSON `{error: ...}` 且没有 status | 作为显式 error 结束；客户端非流式返回 HTTP 502 / JSON error，流式发送 error | 上游 HTTP 200 与客户端 HTTP 分开记录 |
+| 非 2xx HTTP | 原有客户端 HTTP 状态、Retry-After 等允许头不变 | Responses/附件/Images/主动探测共用有界原文字段采集 |
+| 本地信封失败 / 真正连接中断 | 保留既有分类与严格校验，不伪装为上游显式 error | `tool_relay` / 连接或响应转换等既有来源 |
+
+不新增重试。错误字段字符串不脱敏、不修复；不整包复制未知上下文、请求头或对话。无字段/非 JSON/超限/读取失败仍有明确采集状态；64 KiB 上限，detail 最多 8 项、loc 最多 16 段。

@@ -21,7 +21,8 @@ type relay struct {
 	done             map[int]object
 	response         object
 	terminal         string
-	observe          func(object) // Observer applies its own bounded diagnostic projection.
+	observe          func(object)        // Observer applies its own bounded diagnostic projection.
+	projectError     func(object) object // Returns only bounded upstream error fields.
 	started          object
 	holdFrom         int
 	pending          []object
@@ -88,7 +89,7 @@ func (r *relay) event(e object) (bool, error) {
 		}
 		return true, r.finish(e, response)
 	case "error", "response.error":
-		return false, errors.New("BPS 返回流内错误，未完成响应")
+		return true, r.finishStreamError(e)
 	case "response.output_item.added", "response.output_item.done":
 		item, ok := e["item"].(object)
 		if !ok {
@@ -212,9 +213,10 @@ func (r *relay) finish(event object, raw object) error {
 	}
 	r.pending = nil
 	if status == "failed" {
-		result["error"] = object{"code": "bps_response_failed", "message": "BPS 返回 response.failed；未完成响应"}
 		if r.localError != nil {
 			result["error"] = clone(r.localError)
+		} else {
+			result["error"] = r.clientError(object{"type": "response.failed", "response": raw})
 		}
 	}
 	if status == "incomplete" {
@@ -349,6 +351,9 @@ func (r *relay) consume(resp *http.Response) error {
 			r.observe(object{"type": "response." + str(body, "status"), "response": body})
 		}
 		status := str(body, "status")
+		if status == "" && body["error"] != nil {
+			return r.finishStreamError(object{"type": "error", "error": body["error"]})
+		}
 		if status != "completed" && status != "failed" && status != "incomplete" {
 			return errors.New("BPS JSON 响应没有可确认的终态")
 		}

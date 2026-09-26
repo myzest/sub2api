@@ -132,7 +132,7 @@ func TestImagesRefuseUnsupportedParametersBeforeSending(t *testing.T) {
 	}
 }
 
-func TestImagesErrorsPreserveStatusWithoutLeakingPrompt(t *testing.T) {
+func TestImagesErrorsPreserveStatusAndRequestedRawMessage(t *testing.T) {
 	var requests atomic.Int32
 	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requests.Add(1)
@@ -151,7 +151,7 @@ func TestImagesErrorsPreserveStatusWithoutLeakingPrompt(t *testing.T) {
 	if requests.Load() != 1 || frames[0].GetStart().StatusCode != 429 || headersFromProto(frames[0].GetStart().Headers).Get("Retry-After") != "60" {
 		t.Fatal("error status, retry header or no-retry contract changed")
 	}
-	if strings.Contains(s.lastRequest.UpstreamError, "private picture prompt") || !strings.Contains(s.lastRequest.UpstreamError, "image limit reached") || s.lastRequest.ErrorSource != "upstream_http" {
-		t.Fatal("image error not safely diagnosed", s.lastRequest.UpstreamError)
+	if !strings.Contains(s.lastRequest.UpstreamError, "image limit reached for private picture prompt") || s.lastRequest.UpstreamErrorState != "captured_raw" || s.lastRequest.ErrorSource != "upstream_http" {
+		t.Fatal("requested raw image error missing", s.lastRequest.UpstreamError)
 	}
 }

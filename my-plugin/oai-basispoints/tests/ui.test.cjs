@@ -5,6 +5,18 @@ const vm=require('node:vm');
 const crypto=require('node:crypto').webcrypto;
 const model=require('../ui/assets/model.js');
 
+test('upstream stream failures display raw evidence without claiming completion',()=>{
+  const raw=JSON.stringify({code:'capacity_fixture',type:'server_error',message:"fixture 'raw input' https://fixture.invalid/private?q=1"});
+  const text=model.requestText({account_id:58,http_status:200,client_http_status:200,error_source:'upstream_stream',terminal:'error',upstream_error_event:'error',upstream_error_state:'captured_raw',upstream_error:raw,error:'bps_upstream_event',response_attempts:1,protocol_retries:0,output_tool_calls:0});
+  assert.match(text,/错误来源：BPS 流内错误事件/);
+  assert.match(text,/上游错误事件：error/);assert.match(text,/结束状态：error/);
+  assert.match(text,/已采集错误字段原文（未脱敏）/);assert(text.includes(raw));
+  assert.match(text,/HTTP 200 不代表完成/);assert.match(text,/分享记录前请自行检查/);
+  assert.doesNotMatch(text,/错误来源：响应转换|已生成客户端工具调用/);
+  const old=model.requestText({upstream_error_state:'captured'});
+  assert.match(old,/旧记录/);assert.doesNotMatch(old,/已采集错误字段原文/);
+});
+
 test('marked relay diagnostics distinguish raw code from metadata JSON',()=>{
   const text=model.requestText({relay:[{state:'decoded',unwrapped:0,transport:'custom',fields:[{field:'code',type:'string',bytes:2350}]},{state:'rejected',unwrapped:0,transport:'function_code',error_kind:'duplicate_code',fields:[]}],terminal:'response.failed',error:'bps_tool_envelope_invalid',error_source:'tool_relay'});
   assert.match(text,/CUSTOM 原文/);assert.match(text,/FUNCTION_CODE 原文/);

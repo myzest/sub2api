@@ -129,6 +129,14 @@ func probeDiagnostic(value object, headers http.Header, imageURL string) string 
 }
 
 func diagnosticFields(value object, redact func(string, string) string) string {
+	safe := diagnosticObject(value, redact)
+	if len(safe) == 0 {
+		return ""
+	}
+	return limitCharacters(string(encoded(safe)), 1600)
+}
+
+func diagnosticObject(value object, redact func(string, string) string) object {
 	if response, ok := value["response"].(object); ok {
 		value = response
 	}
@@ -174,10 +182,10 @@ func diagnosticFields(value object, redact func(string, string) string) string {
 		safe["detail"] = clean
 	}
 	if len(safe) == 0 {
-		return ""
+		return nil
 	}
 	if kind := str(value, "type"); kind != "" {
 		safe["type"] = redact("type", kind)
 	}
-	return limitCharacters(string(encoded(safe)), 1600)
+	return safe
 }

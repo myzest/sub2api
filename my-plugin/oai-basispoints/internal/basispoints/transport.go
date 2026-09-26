@@ -58,11 +58,14 @@ func (w *forwardWriter) json(status int, value any, headers http.Header) error {
 		if body, ok := value.(object); ok {
 			if failure, ok := body["error"].(object); ok {
 				w.diagnostic.Error = limitCharacters(str(failure, "code")+": "+str(failure, "message"), 1600)
+				alreadyIdentified := str(failure, "diagnostic_id") == w.diagnostic.ID
 				failure["diagnostic_id"] = w.diagnostic.ID
 				failure["source"] = w.diagnostic.ErrorSource
 				failure["responses_started"] = w.diagnostic.ResponsesStarted
 				failure["upstream_started"] = w.diagnostic.UpstreamStarted
-				failure["message"] = str(failure, "message") + "；诊断 ID：" + w.diagnostic.ID
+				if !alreadyIdentified {
+					failure["message"] = str(failure, "message") + "；诊断 ID：" + w.diagnostic.ID
+				}
 			}
 		}
 	}
@@ -188,6 +191,7 @@ func (s *Server) Forward(stream pluginv1.TransportPlugin_ForwardServer) (result 
 		// next attempt must not inherit the earlier Responses HTTP/Request ID.
 		d.HTTPStatus, d.ClientHTTPStatus, d.UpstreamRequestBytes = 0, 0, 0
 		d.ErrorSource, d.RequestID, d.ContentType, d.UpstreamError, d.UpstreamErrorState = "", "", "", "", ""
+		d.UpstreamErrorEvent = ""
 		d.UpstreamImages = nil
 		if pictures != nil {
 			d.Stage = "upload"
@@ -247,7 +251,7 @@ func (s *Server) Forward(stream pluginv1.TransportPlugin_ForwardServer) (result 
 		d.RequestID = redactProbeText(resp.Header.Get("X-Request-Id"), headers, "")
 		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 			d.ErrorSource = "upstream_http"
-			d.UpstreamError, d.UpstreamErrorState = readUpstreamDiagnostic(resp.Body, headers, buffer.Bytes(), plan.body)
+			d.UpstreamError, d.UpstreamErrorState = readUpstreamDiagnostic(resp.Body)
 			if pictures != nil && ctx.Err() == nil {
 				if action := pictures.retry(resp.StatusCode); action != "" {
 					d.retry(action)
@@ -276,10 +280,25 @@ func (s *Server) Forward(stream pluginv1.TransportPlugin_ForwardServer) (result 
 		d.Stage = "response"
 		relay := newRelay(ctx, plan, emit)
 		relay.observe = d.observe
+		relay.projectError = func(event object) object {
+			fields, state := upstreamFailureFields(event)
+			d.UpstreamErrorEvent, d.UpstreamErrorState = str(event, "type"), state
+			if len(fields) > 0 {
+				d.UpstreamError = string(encoded(fields))
+			}
+			d.ErrorSource = "upstream_stream"
+			if d.ContentType != "text/event-stream" {
+				d.ErrorSource = "upstream_response"
+			}
+			d.Error = "bps_upstream_event: BPS 返回 " + d.UpstreamErrorEvent + "；未完成响应"
+			failure := upstreamClientError(fields)
+			failure["diagnostic_id"] = d.ID
+			failure["message"] = str(failure, "message") + "；诊断 ID：" + d.ID
+			return failure
+		}
 		consumeErr := relay.consume(resp)
 		d.Keepalives += relay.keepalives
 		d.CompletionRecovered = relay.recovered
-		d.SkippedTools = plan.tools.skippedTools
 		// A verified response with an invalid relay is a protocol failure, not
 		// a broken HTTP connection. Keep the stream valid and retain its ID.
 		var envelopeErr *relayDecodeError
@@ -289,6 +308,7 @@ func (s *Server) Forward(stream pluginv1.TransportPlugin_ForwardServer) (result 
 			d.Error = "bps_tool_envelope_invalid: " + limitCharacters(consumeErr.Error(), 1000)
 			consumeErr = relay.failEnvelope(d.ID)
 		}
+		d.SkippedTools = plan.tools.skippedTools
 		if err := consumeErr; err != nil {
 			if !plan.stream && d.ProtocolRetries == 0 && ctx.Err() == nil && protocolInterruption(err) {
 				d.ProtocolRetries++
@@ -317,6 +337,11 @@ func (s *Server) Forward(stream pluginv1.TransportPlugin_ForwardServer) (result 
 			d.ErrorSource = "upstream_response"
 		}
 		if !plan.stream {
+			if relay.terminal == "error" {
+				// The upstream HTTP was 200, but no Responses response exists.
+				// 502 is the gateway result, not an invented upstream status.
+				return w.json(http.StatusBadGateway, relay.response, responseHeaders(resp.Header))
+			}
 			return w.json(200, relay.response, responseHeaders(resp.Header))
 		}
 		if err := w.body([]byte("data: [DONE]\n\n")); err != nil {
@@ -506,11 +531,7 @@ func (s *Server) probeRound(ctx context.Context, p *Probe, cfg Config, source ob
 	p.ContentType, _, _ = mime.ParseMediaType(resp.Header.Get("Content-Type"))
 	p.RequestID = redactProbeText(resp.Header.Get("X-Request-Id"), headers, p.ImagePreview)
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		if raw, err := io.ReadAll(io.LimitReader(resp.Body, 64<<10)); err == nil {
-			if value, err := decodeObject(raw); err == nil {
-				p.UpstreamError = probeDiagnostic(value, headers, p.ImagePreview)
-			}
-		}
+		p.UpstreamError, _ = readUpstreamDiagnostic(resp.Body)
 		return nil, errors.New(upstreamMessage(resp.StatusCode))
 	}
 	p.Stage = "response"
@@ -525,15 +546,24 @@ func (s *Server) probeRound(ctx context.Context, p *Probe, cfg Config, source ob
 				p.ResponseID = redactProbeText(id, headers, p.ImagePreview)
 			}
 		}
-		if detail := probeDiagnostic(event, headers, p.ImagePreview); detail != "" {
-			p.UpstreamError = detail
+	}
+	r.projectError = func(event object) object {
+		fields, _ := upstreamFailureFields(event)
+		if len(fields) > 0 {
+			p.UpstreamError = string(encoded(fields))
 		}
+		return upstreamClientError(fields)
 	}
 	if err := r.consume(resp); err != nil {
 		return nil, err
 	}
-	p.ReturnedModel = redactProbeText(str(r.response, "model"), headers, p.ImagePreview)
-	p.ResponseID, p.Usage = redactProbeText(str(r.response, "id"), headers, p.ImagePreview), r.response["usage"]
+	if model := str(r.response, "model"); model != "" {
+		p.ReturnedModel = redactProbeText(model, headers, p.ImagePreview)
+	}
+	if id := str(r.response, "id"); id != "" {
+		p.ResponseID = redactProbeText(id, headers, p.ImagePreview)
+	}
+	p.Usage = r.response["usage"]
 	if r.terminal != "response.completed" {
 		return nil, errors.New("BPS 返回 " + r.terminal + "；通道尚未通过探测")
 	}

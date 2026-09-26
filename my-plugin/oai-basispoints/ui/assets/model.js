@@ -10,7 +10,7 @@
   }
   function valueText(value) { return typeof value==='object'?JSON.stringify(value):String(value); }
   function errorSourceText(source) {
-    return {plugin_local_config:'插件本地模型配置',plugin_local_request:'插件本地请求校验',plugin_history:'工具历史恢复',attachment:'图片附件链路',upstream_http:'BPS HTTP 拒绝',upstream_transport:'BPS 连接或传输',upstream_response:'BPS 响应未完成',tool_relay:'工具信封解析',response_conversion:'响应转换',plugin_transport:'插件传输',client_transport:'客户端传输',request_canceled:'宿主或客户端已取消请求',request_timeout_or_canceled:'请求超时或取消'}[source]||source;
+    return {plugin_local_config:'插件本地模型配置',plugin_local_request:'插件本地请求校验',plugin_history:'工具历史恢复',attachment:'图片附件链路',upstream_http:'BPS HTTP 拒绝',upstream_transport:'BPS 连接或传输',upstream_response:'BPS 响应未完成',upstream_stream:'BPS 流内错误事件',tool_relay:'工具信封解析',response_conversion:'响应转换',plugin_transport:'插件传输',client_transport:'客户端传输',request_canceled:'宿主或客户端已取消请求',request_timeout_or_canceled:'请求超时或取消'}[source]||source;
   }
   function relayText(relays) {
     if(!Array.isArray(relays)||!relays.length)return [];
@@ -49,7 +49,7 @@
     if(p.response_id)lines.push(`Response ID：${p.response_id}`);
     if(p.latency_ms)lines.push(`耗时：${(p.latency_ms/1000).toFixed(1)} 秒`);
     if(p.usage)lines.push(`Usage：${JSON.stringify(p.usage)}`);
-    if(p.upstream_error)lines.push(`上游诊断（已脱敏）：${p.upstream_error}`);
+    if(p.upstream_error)lines.push(`上游诊断（错误字段）：${p.upstream_error}`);
     if(p.kind==='image'||p.kind==='image_route'){
       lines.push(`图片传输：${p.image_transport||'未知'} · detail：${p.image_detail||'未知'} · 格式：${p.image_format||'未记录'}`);
       if(p.attachment)lines.push(...attachmentText(p.attachment));
@@ -110,7 +110,7 @@
     return `当前插件：${snapshot?.version?`v${snapshot.version}`:'版本未提供'} · 实例：${snapshot?.instance||'尚未连接'}${cleared?` · 上次清空：${new Date(cleared*1000).toLocaleString('zh-CN',{hour12:false})}`:''}`;
   }
   function diagnosticStateText(state) {
-    const states={captured:'已采集脱敏校验信息',empty:'错误响应体为空',no_fields:'错误 JSON 不包含可采集的校验字段',non_json:'错误响应不是 JSON',invalid_json:'响应 JSON 无法解析',too_large:'响应超过采集上限',read_error:'响应读取失败',missing_file_id:'附件响应缺少有效文件 ID'};
+    const states={captured:'已采集脱敏校验信息（旧记录）',captured_raw:'已采集错误字段原文（未脱敏）',empty:'错误响应体为空',no_fields:'错误 JSON 不包含可采集的校验字段',non_json:'错误响应不是 JSON',invalid_json:'响应 JSON 无法解析',too_large:'响应超过采集上限',read_error:'响应读取失败',missing_file_id:'附件响应缺少有效文件 ID'};
     return states[state]||state;
   }
   function attachmentText(a) {
@@ -121,7 +121,7 @@
     if(a.content_type)lines.push(`附件 Content-Type：${a.content_type}`);
     if(a.request_id)lines.push(`附件 Request ID：${a.request_id}`);
     if(a.diagnostic_state)lines.push(`附件错误采集：${diagnosticStateText(a.diagnostic_state)}`);
-    if(a.diagnostic)lines.push(`附件诊断（已脱敏）：${a.diagnostic}`);
+    if(a.diagnostic)lines.push(`附件诊断（错误字段）：${a.diagnostic}`);
     if(Array.isArray(a.images)&&a.images.length){
       lines.push('附件文件字段（最多 16 项；插件生成的文件名）：');
       const states={uploaded:'已上传',reused:'缓存复用',failed:'上传失败'};
@@ -189,23 +189,25 @@
     if(r.request_id)lines.push(`${api} Request ID：${r.request_id}`);
     if(r.attachment)lines.push(...attachmentText(r.attachment));
     else if(r.attachment_http_status)lines.push(`附件 HTTP：${r.attachment_http_status}`);
+    if(r.upstream_error_event)lines.push(`上游错误事件：${r.upstream_error_event}`);
     if(r.upstream_error_state){
       lines.push(`上游错误采集：${diagnosticStateText(r.upstream_error_state)}`);
     }
-    if(r.upstream_error)lines.push(`上游诊断（已脱敏）：${r.upstream_error}`);
+    if(r.upstream_error)lines.push(`上游诊断（错误字段）：${r.upstream_error}`);
+    if(r.upstream_error_state==='captured_raw')lines.push('错误字段保留上游原文，可能含回显的输入；分享记录前请自行检查。');
     if(r.terminal)lines.push(`结束状态：${valueText(r.terminal)}`);
     if(r.response_attempts)lines.push(`Responses 发送次数：${r.response_attempts} · 非流式协议中断重试：${r.protocol_retries||0}`);
     const fallbackNames={refresh_cached_attachments:'清除被拒绝的旧附件缓存并重传',upload_rejected_inline_kind:'将被拒绝的内嵌图片改为附件',omit_rejected_images:'改用明确缺图提示',protocol_interruption:'非流式协议中断重试'};
     if(r.image_fallbacks?.length)lines.push(`图片容错路径：${r.image_fallbacks.map(x=>fallbackNames[x]||x).join(' → ')}`);
     for(const attempt of (r.response_retries||[]).slice(0,16)){
       lines.push(`  第 ${attempt.attempt} 次 Responses：HTTP ${attempt.http_status||'未收到响应'} · ${fallbackNames[attempt.reason]||attempt.reason}${attempt.request_id?` · Request ID：${attempt.request_id}`:''}`);
-      if(attempt.upstream_error)lines.push(`    该次上游诊断（已脱敏）：${attempt.upstream_error}`);
+      if(attempt.upstream_error)lines.push(`    该次上游诊断（错误字段）：${attempt.upstream_error}`);
       else if(attempt.upstream_error_state)lines.push(`    该次错误采集：${diagnosticStateText(attempt.upstream_error_state)}`);
     }
     if(r.omitted_images)lines.push(`注意：${r.omitted_images} 张图片未传给模型，已插入缺图提示；本次文本完成不能算作识图成功。`);
     if(r.keepalives)lines.push(`流式保活：${r.keepalives} 次`);
     if(r.completion_recovered)lines.push('终态恢复：依据完整 output_item.done 收尾；未伪造 usage，不代表已收到上游 response.completed。');
-    if(r.skipped_tools)lines.push(`未释放的工具调用：${r.skipped_tools}（无法转换或客户端禁止并行时的额外调用；未执行）`);
+    if(r.skipped_tools)lines.push(`未释放的工具调用：${r.skipped_tools}（响应失败/未完成、无法转换或客户端禁止并行时未释放；未执行）`);
     lines.push(`输入图片总数：${r.input_images||0}`);
     lines.push(...imageSummaryText(r.images,'客户端图片字段'));
     lines.push(...imageSummaryText(r.upstream_images,'上游图片字段'));

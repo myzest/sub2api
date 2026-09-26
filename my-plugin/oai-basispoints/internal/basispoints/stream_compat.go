@@ -10,7 +10,7 @@ import (
 	"golang.org/x/net/http2"
 )
 
-var errSSEWithoutTerminal = errors.New("BPS SSE 提前结束，未收到 completed/failed/incomplete 终态")
+var errSSEWithoutTerminal = errors.New("BPS SSE 提前结束，未收到 completed/failed/incomplete/error 终态")
 
 type sseReadError struct {
 	cause   error
@@ -43,7 +43,7 @@ func (r *relay) consumeStreamEvery(response *http.Response, interval time.Durati
 			select {
 			case events <- readResult{event: e}:
 				switch str(e, "type") {
-				case "response.completed", "response.failed", "response.incomplete":
+				case "response.completed", "response.failed", "response.incomplete", "error", "response.error":
 					return true, nil
 				}
 				return false, nil

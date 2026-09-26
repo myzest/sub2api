@@ -61,12 +61,12 @@
 | 缓存复用、失效刷新 | 400/422 先忘掉本次复用的旧 ID 并重传；fresh 集合跨本请求各次尝试保留，避免重传新上传图片 | picture_fallback.go、attachments.go |
 | 多账号缓存隔离 | 沿用更严格的账号/凭据/端点/格式/内容摘要键，缓存只保存成功结果；并发上传各自拥有取消上下文 | attachments.go |
 | 上传网络不可用 | 包括收到 HTTP 头后读响应体中断；本轮后续新图片不继续上传，已有成功缓存仍可读；已观察到的 HTTP 状态保留。单次上传 120 秒并受总请求取消约束 | picture_fallback.go、attachments.go |
-| 上传错误/无文件 ID | 使用明确缺图占位，诊断保留上传尝试、HTTP 和脱敏原因；支持格式仍限 JPEG/PNG/GIF/WebP，不伪装未知 MIME | picture_fallback.go、attachments.go |
+| 上传错误/无文件 ID | 使用明确缺图占位，诊断保留上传尝试、HTTP 和错误字段（0.1.16 起保留原文）；支持格式仍限 JPEG/PNG/GIF/WebP，不伪装未知 MIME | picture_fallback.go、attachments.go |
 | 最终仍拒绝图片 | 插入 `[image content omitted: ...]`，计数并在 UI 提示；主动图片路由探测不能将文本降级视为识图通过 | picture_fallback.go、image_route_probe.go |
 | 重试条件和终止 | 仅 Responses 400/422；每轮推进旧缓存刷新、按类型上传或最终省略，额外次数不超过图片种类数+2，且受总请求超时约束；新鲜附件不会反复上传 | picture_fallback.go、transport.go |
 | 重试身份 | 每次从同一原始 input 重建图片载体；task_id、turn_id、iteration、模型、detail 不因重试改变 | protocol.go、picture_fallback.go |
 | 其他传输方式 | image_transport=passthrough 不做图片回退；URL、现有 file_id 不下载/不跨通道恢复；独立图片探测保留一次直接上传流程作为对照 | transport.go、probe.go |
-| 重试诊断 | 保留最多 16 次回退摘要：次数、动作、HTTP、Request ID、脱敏原因；新尝试在上传前清空当前 Responses 状态，防止取消后展示前次 HTTP | diagnostics.go、transport.go、UI |
+| 重试诊断 | 保留最多 16 次回退摘要：次数、动作、HTTP、Request ID、错误字段（0.1.16 起保留原文）；新尝试在上传前清空当前 Responses 状态，防止取消后展示前次 HTTP | diagnostics.go、transport.go、UI |
 | 嵌套图片诊断 | 递归计数，摘要最多 16 项；任意业务键用 `*` 代替，不记录图片、URL、file_id；工具声明内示例不作为图片输入 | image_diagnostic.go |
 | 独立 Images 生图/改图 | 0.1.12 已有 JSON generation、multipart edit、固定 gpt-image-2/PNG、provider 头说明；不套用 Responses 的上传/省略/重试 | image_generation.go |
 | Images HTTP 200 异常体 | 新增识别 error、空 data 或仅 URL 响应；按宿主 b64_json 能力计数并标记失败，原 JSON 保留交给宿主，不能只凭 200 报出图成功 | image_generation.go |

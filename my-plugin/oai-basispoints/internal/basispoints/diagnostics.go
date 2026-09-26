@@ -7,7 +7,9 @@ import (
 )
 
 // Bounded completed-request summaries are retained only in memory. Raw request
-// bodies, image URLs/pixels, schemas and tool arguments are never stored here.
+// bodies, image URLs/pixels, schemas and tool arguments are not copied here.
+// Explicit upstream error fields are retained verbatim at the user's request;
+// they may themselves contain input echoed by the upstream service.
 type requestDiagnostic struct {
 	generation             uint64                    // Captured at ingress; a clear also excludes older in-flight requests.
 	ID                     string                    `json:"id"`
@@ -32,6 +34,7 @@ type requestDiagnostic struct {
 	ContentType            string                    `json:"content_type,omitempty"`
 	UpstreamError          string                    `json:"upstream_error,omitempty"`
 	UpstreamErrorState     string                    `json:"upstream_error_state,omitempty"`
+	UpstreamErrorEvent     string                    `json:"upstream_error_event,omitempty"`
 	Images                 []imageDiagnostic         `json:"images,omitempty"`
 	UpstreamImages         []imageDiagnostic         `json:"upstream_images,omitempty"`
 	ToolTypes              map[string]int            `json:"tool_types"`

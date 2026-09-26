@@ -32,7 +32,7 @@ func TestAttachmentFailureDoesNotReusePreviousHTTP(t *testing.T) {
 	}
 }
 
-func TestAttachmentHTTPErrorUsesProductionRedaction(t *testing.T) {
+func TestAttachmentHTTPErrorPreservesRequestedRawFields(t *testing.T) {
 	data := []byte("fixture pixels")
 	payload := base64.StdEncoding.EncodeToString(data)
 	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -43,15 +43,15 @@ func TestAttachmentHTTPErrorUsesProductionRedaction(t *testing.T) {
 	defer up.Close()
 	report := &attachmentReport{}
 	_, err := New().uploadImage(context.Background(), up.URL, http.Header{}, "", "image/png", "image.png", data, "data:image/png;base64,"+payload, report)
-	if err == nil || report.HTTPStatus != 400 || report.DiagnosticState != "captured" {
+	if err == nil || report.HTTPStatus != 400 || report.DiagnosticState != "captured_raw" {
 		t.Fatalf("missing HTTP rejection: %+v, %v", report, err)
 	}
 	for _, secret := range []string{payload, "upload.invalid", "signature=fixture", "private fragment"} {
-		if strings.Contains(report.Diagnostic, secret) {
-			t.Fatalf("attachment error leaked %q", secret)
+		if !strings.Contains(report.Diagnostic, secret) {
+			t.Fatalf("requested raw error field changed %q", secret)
 		}
 	}
 	if !strings.Contains(report.Diagnostic, "got none") || !strings.Contains(report.Diagnostic, `"param":"input"`) {
-		t.Fatal("redaction removed useful validation evidence", report.Diagnostic)
+		t.Fatal("missing raw validation evidence", report.Diagnostic)
 	}
 }
