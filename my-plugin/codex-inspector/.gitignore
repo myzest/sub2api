@@ -1,0 +1,6 @@
+build/
+dist/
+.cache/
+.signing/
+node_modules/
+test-results/

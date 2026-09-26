@@ -1,0 +1,11 @@
+{
+  "source": "../../backend/pkg/pluginapi/v1",
+  "revision": "58420f95af99e408831ad802cc5b96f483aa2361",
+  "files": {
+    "plugin.pb.go": "6af7456f7208f180c9ee081a32bbbc029234e855b778b68ac64c1c33be954a63",
+    "plugin_grpc.pb.go": "a787c75a3c95b81483ead670b9f74b52d092c7bb0652d1ffb8cc4f1667501d7e",
+    "runtime.go": "72b32af120f61617dec82bde6248082b8c39e99294925adc9184816bee06efe3",
+    "plugin.proto": "ee309c946e339b76523ed123e8963b788c0f4cafeffd58f399563bdd2d42ca69",
+    "manifest.schema.json": "d6e33c6074370629bc276f29864693a63f20109051f8c95f585dc7c28f9f4e4f"
+  }
+}

@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Codex Inspector</title>
+  <link rel="stylesheet" href="styles.css">
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <main id="app">
+    <header class="header"><div><p class="eyebrow">SUB2API · OPENAI OAUTH</p><h1>Codex Inspector</h1><p class="subtle">Codex 请求时区改写与模型统计指纹检测</p></div><span id="connection" class="badge">正在连接</span></header>
+    <p id="notice" role="status" aria-live="polite" class="notice">正在读取插件配置与运行状态…</p>
+    <div class="toolbar"><label class="toggle"><input id="enabled" type="checkbox">启用请求时区改写</label><span id="dirty" class="subtle">配置加载中</span><button id="save" type="button" disabled>保存配置</button></div>
+    <nav class="tabs" aria-label="插件功能"><button id="timezone-tab" type="button" aria-selected="true" aria-controls="timezone-panel">时区设置</button><button id="detect-tab" type="button" aria-selected="false" aria-controls="detect-panel">模型检测</button></nav>
+    <section id="timezone-panel" aria-labelledby="timezone-tab">
+      <div class="section-head"><div><h2>出站时间环境</h2><p class="subtle">只处理受支持的 Codex 文本结构；日期按目标时区重新计算。</p></div></div>
+      <fieldset id="timezone-modes"><legend>选择时区策略</legend><label><input type="radio" name="mode" value="egress_ip">出口 IP 时区<span>经账号代理查询出口位置，失败时使用回退时区</span></label><label><input type="radio" name="mode" value="random_stable">稳定随机时区<span>按账号保持一致，从内置白名单选取</span></label><label><input type="radio" name="mode" value="custom">自定义时区<span>对未配置覆盖的账号使用同一个时区</span></label></fieldset>
+      <div class="form-grid"><label>自定义时区<select id="custom-tz"></select></label><label>回退时区<select id="default-tz"></select></label><label>出口缓存时长（小时）<input id="cache-hours" type="number" min="1" max="720" step="1"></label></div>
+      <div class="section-head"><div><h3>账号时区覆盖</h3><p class="subtle">覆盖优先于策略；选择“跟随策略”移除该账号的覆盖。</p></div></div>
+      <div id="overrides" class="list empty">等待账号列表</div>
+      <aside class="callout"><strong>覆盖边界</strong><p>仅处理 user 消息中以 environment_context 开头的 input_text，改写块内第一个 timezone 与 current_date。任意自然语言、非文本内容和未识别结构不会改写。解析、宿主、KV 或 GeoIP 失败均优先保持业务转发。</p><p>该插件接管 OpenAI OAuth 出站 transport。宿主的 WebSocket 请求会桥接为 HTTP；插件不建立原生上游 WebSocket，可能改变原生 WebSocket 优化路径。</p></aside>
+    </section>
+    <section id="detect-panel" aria-labelledby="detect-tab" hidden>
+      <div class="section-head"><div><h2>模型统计指纹</h2><p class="subtle">比较输出分布与内置指纹库，按账号与声明模型组合检测。</p></div><button id="refresh" class="secondary" type="button">刷新状态</button></div>
+      <aside class="callout warning"><strong>统计匹配不是智商、能力或身份事实</strong><p>结果依赖指纹库、采样、模型版本与服务端策略。概率是候选模型间的相对统计分数，并非“降智概率”；不匹配不能单独证明服务降级。无有效输出时没有可靠判定。</p></aside>
+      <div class="selection-grid"><fieldset><legend>检测账号</legend><div id="accounts" class="choices">等待账号列表</div></fieldset><fieldset><legend>候选请求模型</legend><div id="models" class="choices">等待模型列表</div></fieldset></div>
+      <div class="form-grid"><label>每组合重复次数<input id="repeats" type="number" min="1" max="10" step="1"></label><label>并发账号数<input id="concurrency" type="number" min="1" max="16" step="1"></label></div>
+      <div class="action-bar"><div><strong id="request-count">请选择账号与模型</strong><p class="subtle">检测使用所选账号与其代理，真实消耗账号额度；同一账号的模型与轮次串行执行。</p></div><button id="start" type="button" disabled>开始检测</button></div>
+      <div class="progress-card"><div class="section-head"><h3>最近检测</h3><span id="task-state" class="badge">暂无任务</span></div><p id="task-info" class="subtle">检测结果仅保存在宿主插件 KV。</p><progress id="progress" value="0" max="1" aria-label="检测进度"></progress><div class="table-scroll"><table><thead><tr><th>账号 / 请求模型</th><th>指纹判定</th><th>匹配</th><th>相对概率</th><th>Top-1 / 有效轮次</th><th>平均延迟</th><th>失败原因</th></tr></thead><tbody id="results"></tbody></table></div><p id="no-results" class="subtle">暂无检测结果</p></div>
+      <aside class="callout"><strong>运行与存储说明</strong><p>关闭本弹窗不会取消已接受任务。进程停止、租约丢失或宿主失联可能中断任务；中断不会自动续跑，重新检测会再次消耗额度。当前协议不提供手动取消按钮。</p><p>KV 没有原子抢锁，多副本租约是 best-effort，不能保证恰好一次执行；需避免并发打开多个配置窗口启动任务。任务保留 7 天，幂等标记保留 24 小时。</p></aside>
+    </section>
+    <details id="diagnostics"><summary>运行诊断（已脱敏）</summary><p id="runtime-info" class="subtle">尚未获取运行信息</p><div class="table-scroll"><table><thead><tr><th>时间</th><th>事件</th><th>结果 / 次数</th><th>详情</th></tr></thead><tbody id="events"></tbody></table></div><p id="no-events" class="subtle">暂无诊断事件</p></details>
+    <footer class="subtle">Codex Inspector · 0.1.0 · Host UI Bridge v1</footer>
+  </main>
+  <div id="confirm-overlay" class="overlay" hidden><section class="confirm-box" role="dialog" aria-modal="true" aria-labelledby="confirm-title" aria-describedby="confirm-details"><h2 id="confirm-title">确认消耗账号额度</h2><p id="confirm-details"></p><p class="subtle">将保存当前完整配置，然后请求宿主执行检测。请勿在其他配置窗口同时修改或启动任务。</p><div class="confirm-actions"><button id="confirm-cancel" class="secondary" type="button">返回修改</button><button id="confirm-start" type="button">确认并开始检测</button></div></section></div>
+</body>
+</html>

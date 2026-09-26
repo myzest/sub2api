@@ -1,0 +1,13 @@
+{
+  "repository": "https://github.com/xqy2006/ModelTrace.git",
+  "revision": "55a2e4a55170423b484d701e9a82ab62b268c811",
+  "license": "MIT",
+  "files": {
+    "data/unified_bank.json": "1c2cb74d372f9f0f30d0dabbb7b7a838660d2f769a88d0c8489e4c662e088c21",
+    "static/fingerprint-core.js": "83fa5bd611e18f8339122582335123c8ea168ed242298bb31f4e363abeeb6e4a",
+    "static/challenge-browser.js": "4a3868c9fe237cabde92f0d2bffaf32118f558f7a43fcc336874fecd2bf6be39",
+    "data/gpt_reference.jsonl": "b87e5630286308fdcec0893b89873635bf274b64a5269f41039eb46e66d3793f",
+    "LICENSE": "238afb57e498990742f84b9ce6167b4e256ac06104a9938ce953bc41c14bea51"
+  },
+  "notes": "Bank copied from git blob without newline conversion. Go scoring and challenges are ports of the pinned JS. Golden fixtures use the first three upstream real responses for each GPT model."
+}

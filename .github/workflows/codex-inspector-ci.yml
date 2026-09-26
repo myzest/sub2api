@@ -1,0 +1,48 @@
+name: Codex Inspector CI
+on:
+  pull_request:
+    paths: ['my-plugin/codex-inspector/**', 'backend/pkg/pluginapi/v1/**', '.github/workflows/codex-inspector-ci.yml']
+  push:
+    paths: ['my-plugin/codex-inspector/**', 'backend/pkg/pluginapi/v1/**', '.github/workflows/codex-inspector-ci.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: my-plugin/codex-inspector
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: my-plugin/codex-inspector/go.mod
+          cache-dependency-path: my-plugin/codex-inspector/go.sum
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: my-plugin/codex-inspector/package-lock.json
+      - name: Verify SDK bytes and formatting
+        run: |
+          go run ./tools/sync-pluginapi -upstream
+          test -z "$(gofmt -l cmd internal tools)"
+      - name: Vet, build actual plugin, and test with race detector
+        run: |
+          go vet ./...
+          mkdir -p build
+          go build -o build/codex-inspector ./cmd/codex-inspector
+          CODEX_INSPECTOR_TEST_BINARY="$PWD/build/codex-inspector" go test -race ./... -count=1
+      - name: Test UI in real opaque-origin iframe
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund
+          npm run check
+          npx playwright install --with-deps chromium
+          npm test
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: codex-inspector-ui-failure-screenshots
+          path: my-plugin/codex-inspector/test-results/
+          if-no-files-found: ignore

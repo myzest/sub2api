@@ -1,0 +1,10 @@
+{
+  "name": "sub2api-codex-inspector-ui-tests",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "test": "node --test tests/ui.test.cjs",
+    "check": "node --check ui/app.js"
+  },
+  "devDependencies": { "playwright": "1.60.0" }
+}

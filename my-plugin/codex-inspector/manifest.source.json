@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "id": "local.codex-inspector",
+  "name": "Codex Inspector",
+  "version": "0.1.0",
+  "description": "Codex 出站时区与日期改写、按 OpenAI OAuth 账号进行 ModelTrace 统计指纹检测。统计结果不是智商或服务身份事实。",
+  "author": "Local Sub2API Plugins",
+  "requires": {
+    "sub2api": ">=0.2.8 <0.3.0",
+    "recommended_sub2api_version": "0.2.8",
+    "tested_sub2api_versions": [],
+    "plugin_protocol": 1,
+    "transport_api": 1,
+    "ui_bridge": 1
+  },
+  "capabilities": [
+    { "id": "openai.oauth.outbound_transport.v1", "platform": "openai", "account_type": "oauth" }
+  ],
+  "runtimes": {
+    "linux-amd64": { "path": "runtimes/linux-amd64/codex-inspector" },
+    "linux-arm64": { "path": "runtimes/linux-arm64/codex-inspector" },
+    "darwin-arm64": { "path": "runtimes/darwin-arm64/codex-inspector" }
+  },
+  "ui": { "entrypoint": "ui/index.html" },
+  "files": {}
+}

@@ -1,0 +1,57 @@
+name: Codex Inspector Signed Package
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Expected manifest version (for example 0.1.0)'
+        required: true
+        type: string
+permissions:
+  contents: read
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: my-plugin/codex-inspector
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: my-plugin/codex-inspector/go.mod
+          cache-dependency-path: my-plugin/codex-inspector/go.sum
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Verify requested version, SDK, and actual plugin process
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          node -e 'const m=require("./manifest.source.json");if(m.version!==process.env.RELEASE_VERSION)throw Error("Requested version differs from manifest")'
+          go run ./tools/sync-pluginapi -upstream
+          go vet ./...
+          mkdir -p build
+          go build -o build/codex-inspector ./cmd/codex-inspector
+          CODEX_INSPECTOR_TEST_BINARY="$PWD/build/codex-inspector" go test -race ./... -count=1
+      - name: Build and verify signed artifact
+        env:
+          SIGNING_KEY: ${{ secrets.CODEX_INSPECTOR_SIGNING_KEY }}
+          PUBLISHER_ID: ${{ vars.CODEX_INSPECTOR_PUBLISHER_ID || 'codex-inspector-local-v1' }}
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          test -n "$SIGNING_KEY" || { echo 'Missing dedicated CODEX_INSPECTOR_SIGNING_KEY secret'; exit 1; }
+          umask 077
+          KEY_PATH="$(mktemp)"
+          trap 'rm -f "$KEY_PATH"' EXIT
+          printf '%s\n' "$SIGNING_KEY" > "$KEY_PATH"
+          unset SIGNING_KEY
+          go run ./tools/packager build -key "$KEY_PATH" -publisher "$PUBLISHER_ID" -version "$RELEASE_VERSION"
+          node tests/verify-package.cjs
+      - uses: actions/upload-artifact@v4
+        with:
+          name: codex-inspector-${{ inputs.version }}
+          path: |
+            my-plugin/codex-inspector/dist/*.s2plugin
+            my-plugin/codex-inspector/dist/*.sha256
+            my-plugin/codex-inspector/dist/trusted-publisher.yaml
+          if-no-files-found: error
