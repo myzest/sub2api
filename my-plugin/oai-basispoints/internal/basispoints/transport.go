@@ -483,6 +483,7 @@ func (s *Server) passthrough(w *forwardWriter, start *pluginv1.ForwardRequestSta
 
 func (s *Server) probeRound(ctx context.Context, p *Probe, cfg Config, source object, h, headers http.Header, proxy string) (object, error) {
 	started := time.Now()
+	p.Stream = nil
 	p.HTTPStatus, p.RequestBytes = 0, 0
 	p.RequestID, p.ContentType, p.UpstreamError = "", "", ""
 	p.ResponseID, p.ReturnedModel, p.Usage, p.Attachment = "", "", nil, nil
@@ -491,7 +492,7 @@ func (s *Server) probeRound(ctx context.Context, p *Probe, cfg Config, source ob
 	p.Stage = "prepare"
 	s.publishProbe(p)
 	defer func() {
-		p.Rounds = append(p.Rounds, probeRoundResult{Round: p.Round, HTTPStatus: p.HTTPStatus, RequestID: p.RequestID, ResponseID: p.ResponseID, ReturnedModel: p.ReturnedModel, LatencyMS: time.Since(started).Milliseconds(), Usage: p.Usage, Relay: p.Relay, Replay: p.Replay})
+		p.Rounds = append(p.Rounds, probeRoundResult{Round: p.Round, HTTPStatus: p.HTTPStatus, RequestID: p.RequestID, ResponseID: p.ResponseID, ReturnedModel: p.ReturnedModel, LatencyMS: time.Since(started).Milliseconds(), Usage: p.Usage, Relay: p.Relay, Replay: p.Replay, Stream: p.Stream.snapshot()})
 		s.publishProbe(p)
 	}()
 	plan, err := s.prepare(ctx, encoded(source), p.AccountID, h, cfg)
@@ -526,6 +527,9 @@ func (s *Server) probeRound(ctx context.Context, p *Probe, cfg Config, source ob
 	}
 	resp, err := t.RoundTrip(req)
 	if err != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
 		return nil, errors.New(networkError(ctx, err))
 	}
 	defer resp.Body.Close()
@@ -538,9 +542,17 @@ func (s *Server) probeRound(ctx context.Context, p *Probe, cfg Config, source ob
 		return nil, errors.New(upstreamMessage(resp.StatusCode))
 	}
 	p.Stage = "response"
+	if p.ContentType == "text/event-stream" {
+		p.Stream = &probeStreamProgress{}
+	}
 	s.publishProbe(p)
 	r := newRelay(ctx, plan, nil)
+	lastPublished := time.Time{}
 	r.observe = func(event object) {
+		now := time.Now()
+		if p.Stream != nil {
+			p.Stream.observe(str(event, "type"), now)
+		}
 		if response, ok := event["response"].(object); ok {
 			if model := str(response, "model"); model != "" {
 				p.ReturnedModel = redactProbeText(model, headers, p.ImagePreview)
@@ -548,6 +560,12 @@ func (s *Server) probeRound(ctx context.Context, p *Probe, cfg Config, source ob
 			if id := str(response, "id"); id != "" {
 				p.ResponseID = redactProbeText(id, headers, p.ImagePreview)
 			}
+		}
+		// Publish the first event immediately, then at most once per two
+		// seconds; the deferred round snapshot always captures final state.
+		if lastPublished.IsZero() || now.Sub(lastPublished) >= 2*time.Second {
+			s.publishProbe(p)
+			lastPublished = now
 		}
 	}
 	r.projectError = func(event object) object {
@@ -557,7 +575,11 @@ func (s *Server) probeRound(ctx context.Context, p *Probe, cfg Config, source ob
 		}
 		return upstreamClientError(fields)
 	}
-	if err := r.consume(resp); err != nil {
+	err = r.consume(resp)
+	if p.Stream != nil {
+		p.Stream.Terminal, p.Stream.Recovered = r.terminal, r.recovered
+	}
+	if err != nil {
 		return nil, err
 	}
 	if model := str(r.response, "model"); model != "" {

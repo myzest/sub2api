@@ -28,7 +28,7 @@
   </section>
   <section aria-labelledby="probe-title">
     <h2 id="probe-title">单账号探测</h2>
-    <p class="hint">无需导出凭据，无需已有 Excel 对话。下方操作会先保存当前设置，再使用所选账号额度探测；同一时间只能运行一项，最长等待 120 秒。文本和图片各一次模型请求（附件模式的图片另需上传），工具最多三次模型请求。</p>
+    <p class="hint">无需导出凭据，无需已有 Excel 对话。下方操作会先保存当前设置，再使用所选账号额度探测；同一时间只能运行一项。总时间预算遵循上方“请求超时”，包含身份获取、附件上传及全部轮次，不再额外限制为 120 秒。文本和图片各一次模型请求（附件模式的图片另需上传），工具最多三次模型请求，共享总预算。</p>
     <div class="grid">
       <div><label for="probe-account">账号</label><select id="probe-account"></select></div>
       <div><label for="probe-model">模型</label><select id="probe-model"></select></div>

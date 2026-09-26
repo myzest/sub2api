@@ -48,6 +48,17 @@ test('probe result distinguishes reachability from quality and shows real model'
   const text=model.probeText({state:'succeeded',account_id:7,model:'gpt-5.6-sol',effort:'high',returned_model:'actual-model',http_status:200,message:'可访问；不代表模型质量验收',latency_ms:1200});
   assert.match(text,/actual-model/);assert.match(text,/不代表模型质量/);assert.match(text,/1.2 秒/);
 });
+test('probe timeout and event progress do not imply tool unavailability or completion',()=>{
+  const progress={events:2,first_at:100,last_at:104,last_type:'response.in_progress'};
+  const text=model.probeText({kind:'tools',state:'failed',timeout_seconds:600,http_status:200,round:1,message:'context deadline exceeded',stream_progress:progress,rounds:[{round:1,http_status:200,stream_progress:progress}]});
+  assert.match(text,/探测总时间预算：600 秒/);assert.match(text,/全部轮次共享/);
+  assert.match(text,/已处理响应事件：2 项/);assert.match(text,/最近响应事件：response.in_progress/);
+  assert.match(text,/最近事件时间：/);assert.match(text,/尚未确认；HTTP 200 或 Response ID 不代表已完成/);
+  assert.match(text,/不能据此判断客户端没有工具或模型不支持工具/);
+  assert.doesNotMatch(model.probeText({kind:'tools',state:'failed'}),/已处理响应事件/);
+  const recovered=model.probeText({kind:'text',state:'succeeded',stream_progress:{events:3,terminal:'response.completed',recovered:true}});
+  assert.match(recovered,/已确认响应终态：response.completed/);assert.match(recovered,/不是上游原始终态/);
+});
 test('cached images do not hide a later upload without an HTTP response',()=>{
   const text=model.requestText({account_id:7,attachment:{uploaded:1,reused:1,attempts:2,images:[{path:'input[1].content[1]',state:'failed'}]}});
   assert.match(text,/上传尝试 2 次/);

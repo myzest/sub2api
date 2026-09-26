@@ -34,6 +34,15 @@
     if(r.failure)lines.push(`回放失败分类：${r.failure}`);
     return lines;
   }
+  function probeStreamText(s) {
+    if(!s)return [];
+    const lines=[`已处理响应事件：${s.events||0} 项（不含 SSE 注释心跳）`];
+    if(s.last_type)lines.push(`最近响应事件：${s.last_type}`);
+    if(Number.isFinite(s.last_at)&&s.last_at>0)lines.push(`最近事件时间：${new Date(s.last_at*1000).toLocaleString('zh-CN',{hour12:false})}`);
+    lines.push(`已确认响应终态：${s.terminal||'尚未确认；HTTP 200 或 Response ID 不代表已完成'}`);
+    if(s.recovered)lines.push('终态来源：由完整 done 输出恢复，不是上游原始终态；未伪造 usage。');
+    return lines;
+  }
   function probeText(p) {
     if(!p) return '尚未探测';
     const kind={text:'文本',image:'图片',image_route:'图片路由',tools:'工具'}[p.kind]||'文本';
@@ -41,6 +50,7 @@
     const state = {running:'探测中',succeeded:success,failed:'探测失败'}[p.state] || p.state;
     const lines=[`${kind} · ${state} · 账号 #${p.account_id} · ${p.model} / ${p.effort}`,`请求来源：插件主动${kind}探测（单账号探测结果）`];
     if(p.id)lines.push(`探测 ID：${p.id}`);
+    if(Number.isFinite(p.timeout_seconds)&&p.timeout_seconds>0)lines.push(`探测总时间预算：${p.timeout_seconds} 秒（身份获取、附件上传及全部轮次共享）`);
     for(const [key,label] of [['started_at','开始时间'],['finished_at','结束时间']]){
       if(Number.isFinite(p[key])&&p[key]>0)lines.push(`${label}：${new Date(p[key]*1000).toLocaleString('zh-CN',{hour12:false})}`);
     }
@@ -53,6 +63,7 @@
     if(p.request_bytes)lines.push(`Responses 请求体：${p.request_bytes} bytes`);
     if(p.returned_model)lines.push(`上游返回模型：${p.returned_model}`);
     if(p.response_id)lines.push(`Response ID：${p.response_id}`);
+    lines.push(...probeStreamText(p.stream_progress));
     if(p.latency_ms)lines.push(`耗时：${(p.latency_ms/1000).toFixed(1)} 秒`);
     if(p.usage)lines.push(`Usage：${JSON.stringify(p.usage)}`);
     if(p.upstream_error)lines.push(`上游诊断（错误字段）：${p.upstream_error}`);
@@ -71,6 +82,7 @@
       if(p.tool_name)lines.push(`模拟工具：${p.tool_name}`);
       if(p.tool_source)lines.push(`工具声明位置：${p.tool_source} · 类型：${p.tool_type||'未知'}`);
       lines.push(`已转换工具调用：${p.tool_calls||0}`);
+      if(p.state==='failed'&&!p.tool_calls)lines.push('未完成工具调用转换与校验，不能据此判断客户端没有工具或模型不支持工具。');
       if(p.tool_expected)lines.push(`模拟结果中的校验值：${p.tool_expected}`);
       if(p.tool_reply)lines.push(`回放后实际回复：${p.tool_reply}`);
       for(const r of p.rounds||[]){
@@ -81,6 +93,7 @@
         if(r.response_id)lines.push(`  Response ID：${r.response_id}`);
         if(r.returned_model)lines.push(`  上游返回模型：${r.returned_model}`);
         if(r.usage)lines.push(`  Usage：${JSON.stringify(r.usage)}`);
+        lines.push(...probeStreamText(r.stream_progress).map(line=>`  ${line}`));
         lines.push(...relayText(r.relay),...replayText(r.replay));
       }
       lines.push('此探测使用模拟的客户端结果；本地文件读取和实际执行需在 Codex 客户端验证。');

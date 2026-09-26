@@ -110,7 +110,7 @@
     await save(cmd);await test(cmd);
     const kind={probe_image:'图片',probe_image_route:'图片路由',probe_tools:'工具',probe:'文本'}[action];
     const detail=action==='probe_image_route'?'图片路由历史还会生成关联诊断，请核对结果中的路由诊断 ID。':'来源为“客户端路由”的记录不代表本次探测。';
-    notice(`设置已保存，${kind}探测已启动；探测 ID：${cmd.id}。请查看“单账号探测”结果，最长等待 120 秒；${detail}`);await status();
+    notice(`设置已保存，${kind}探测已启动；探测 ID：${cmd.id}。请查看“单账号探测”结果，总时间预算 ${saved.timeout_seconds} 秒（全部轮次共享）；${detail}`);await status();
     $('probe-result').focus({preventScroll:true});
     $('probe-result').scrollIntoView({block:'nearest'});
   }

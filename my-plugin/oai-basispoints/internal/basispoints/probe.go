@@ -6,23 +6,65 @@ import (
 	"errors"
 	"net/http"
 	"strings"
+	"time"
 )
 
+func probeContext(cfg Config) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.Background(), time.Duration(cfg.TimeoutSeconds)*time.Second)
+}
+
+// Metadata only: never retain reasoning, text deltas or tool arguments.
+// Counts are processed response events, including a recovered terminal when
+// applicable; they are not a raw network-byte count or proof of execution.
+type probeStreamProgress struct {
+	Events    int    `json:"events"`
+	FirstAt   int64  `json:"first_at,omitempty"`
+	LastAt    int64  `json:"last_at,omitempty"`
+	LastType  string `json:"last_type,omitempty"`
+	Terminal  string `json:"terminal,omitempty"`
+	Recovered bool   `json:"recovered,omitempty"`
+}
+
+func (p *probeStreamProgress) snapshot() *probeStreamProgress {
+	if p == nil {
+		return nil
+	}
+	copy := *p
+	return &copy
+}
+
+func (p *probeStreamProgress) observe(kind string, now time.Time) {
+	p.Events++
+	if p.Events == 1 {
+		p.FirstAt = now.Unix()
+	}
+	p.LastAt = now.Unix()
+	// Protocol event labels are short ASCII identifiers, not arbitrary text.
+	if len(kind) == 0 || len(kind) > 128 || strings.IndexFunc(kind, func(c rune) bool {
+		return !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '_' || c == '.' || c == '-')
+	}) >= 0 {
+		kind = "unknown"
+	}
+	p.LastType = kind
+}
+
 type probeRoundResult struct {
-	Round         int               `json:"round"`
-	HTTPStatus    int               `json:"http_status,omitempty"`
-	RequestID     string            `json:"request_id,omitempty"`
-	ResponseID    string            `json:"response_id,omitempty"`
-	ReturnedModel string            `json:"returned_model,omitempty"`
-	LatencyMS     int64             `json:"latency_ms"`
-	Usage         any               `json:"usage,omitempty"`
-	Relay         []relayDiagnostic `json:"relay,omitempty"`
-	Replay        *replayDiagnostic `json:"replay,omitempty"`
+	Round         int                  `json:"round"`
+	HTTPStatus    int                  `json:"http_status,omitempty"`
+	RequestID     string               `json:"request_id,omitempty"`
+	ResponseID    string               `json:"response_id,omitempty"`
+	ReturnedModel string               `json:"returned_model,omitempty"`
+	LatencyMS     int64                `json:"latency_ms"`
+	Usage         any                  `json:"usage,omitempty"`
+	Relay         []relayDiagnostic    `json:"relay,omitempty"`
+	Replay        *replayDiagnostic    `json:"replay,omitempty"`
+	Stream        *probeStreamProgress `json:"stream_progress,omitempty"`
 }
 
 // Publish a stable copy; the worker continues updating its own probe value.
 func (s *Server) publishProbe(p *Probe) {
 	copy := *p
+	copy.Stream = p.Stream.snapshot()
 	copy.Rounds = append([]probeRoundResult(nil), p.Rounds...)
 	copy.Relay = append([]relayDiagnostic(nil), p.Relay...)
 	if p.Replay != nil {

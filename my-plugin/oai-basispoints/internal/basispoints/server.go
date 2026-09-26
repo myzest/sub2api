@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"sync"
 	"time"
 
@@ -19,43 +20,45 @@ type Account struct {
 	Schedulable bool   `json:"schedulable"`
 }
 type Probe struct {
-	ID                string             `json:"id"`
-	AccountID         int64              `json:"account_id"`
-	Model             string             `json:"model"`
-	Effort            string             `json:"effort"`
-	State             string             `json:"state"`
-	Message           string             `json:"message"`
-	HTTPStatus        int                `json:"http_status,omitempty"`
-	ReturnedModel     string             `json:"returned_model,omitempty"`
-	ResponseID        string             `json:"response_id,omitempty"`
-	Usage             any                `json:"usage,omitempty"`
-	LatencyMS         int64              `json:"latency_ms,omitempty"`
-	StartedAt         int64              `json:"started_at,omitempty"`
-	FinishedAt        int64              `json:"finished_at,omitempty"`
-	Kind              string             `json:"kind,omitempty"`
-	Stage             string             `json:"stage,omitempty"`
-	ContentType       string             `json:"content_type,omitempty"`
-	RequestID         string             `json:"request_id,omitempty"`
-	RequestBytes      int                `json:"request_bytes,omitempty"`
-	UpstreamError     string             `json:"upstream_error,omitempty"`
-	ImageDetail       string             `json:"image_detail,omitempty"`
-	ImageFormat       string             `json:"image_format,omitempty"`
-	ImagePreview      string             `json:"image_preview,omitempty"`
-	ImageExpected     string             `json:"image_expected,omitempty"`
-	ImageReply        string             `json:"image_reply,omitempty"`
-	ImageTransport    string             `json:"image_transport,omitempty"`
-	Attachment        *attachmentReport  `json:"attachment,omitempty"`
-	Round             int                `json:"round,omitempty"`
-	Rounds            []probeRoundResult `json:"rounds,omitempty"`
-	ToolName          string             `json:"tool_name,omitempty"`
-	ToolType          string             `json:"tool_type,omitempty"`
-	ToolSource        string             `json:"tool_source,omitempty"`
-	ToolCalls         int                `json:"tool_calls,omitempty"`
-	ToolExpected      string             `json:"tool_expected,omitempty"`
-	ToolReply         string             `json:"tool_reply,omitempty"`
-	Relay             []relayDiagnostic  `json:"relay,omitempty"`
-	Replay            *replayDiagnostic  `json:"replay,omitempty"`
-	RouteDiagnosticID string             `json:"route_diagnostic_id,omitempty"`
+	ID                string               `json:"id"`
+	AccountID         int64                `json:"account_id"`
+	Model             string               `json:"model"`
+	Effort            string               `json:"effort"`
+	State             string               `json:"state"`
+	Message           string               `json:"message"`
+	HTTPStatus        int                  `json:"http_status,omitempty"`
+	ReturnedModel     string               `json:"returned_model,omitempty"`
+	ResponseID        string               `json:"response_id,omitempty"`
+	Usage             any                  `json:"usage,omitempty"`
+	LatencyMS         int64                `json:"latency_ms,omitempty"`
+	StartedAt         int64                `json:"started_at,omitempty"`
+	FinishedAt        int64                `json:"finished_at,omitempty"`
+	TimeoutSeconds    int                  `json:"timeout_seconds,omitempty"`
+	Stream            *probeStreamProgress `json:"stream_progress,omitempty"`
+	Kind              string               `json:"kind,omitempty"`
+	Stage             string               `json:"stage,omitempty"`
+	ContentType       string               `json:"content_type,omitempty"`
+	RequestID         string               `json:"request_id,omitempty"`
+	RequestBytes      int                  `json:"request_bytes,omitempty"`
+	UpstreamError     string               `json:"upstream_error,omitempty"`
+	ImageDetail       string               `json:"image_detail,omitempty"`
+	ImageFormat       string               `json:"image_format,omitempty"`
+	ImagePreview      string               `json:"image_preview,omitempty"`
+	ImageExpected     string               `json:"image_expected,omitempty"`
+	ImageReply        string               `json:"image_reply,omitempty"`
+	ImageTransport    string               `json:"image_transport,omitempty"`
+	Attachment        *attachmentReport    `json:"attachment,omitempty"`
+	Round             int                  `json:"round,omitempty"`
+	Rounds            []probeRoundResult   `json:"rounds,omitempty"`
+	ToolName          string               `json:"tool_name,omitempty"`
+	ToolType          string               `json:"tool_type,omitempty"`
+	ToolSource        string               `json:"tool_source,omitempty"`
+	ToolCalls         int                  `json:"tool_calls,omitempty"`
+	ToolExpected      string               `json:"tool_expected,omitempty"`
+	ToolReply         string               `json:"tool_reply,omitempty"`
+	Relay             []relayDiagnostic    `json:"relay,omitempty"`
+	Replay            *replayDiagnostic    `json:"replay,omitempty"`
+	RouteDiagnosticID string               `json:"route_diagnostic_id,omitempty"`
 }
 type Snapshot struct {
 	Instance             string               `json:"instance"`
@@ -266,7 +269,7 @@ func (s *Server) command(ctx context.Context, cfg Config) (any, error) {
 			err = errors.New("已有探测正在运行")
 		} else {
 			e, _ := effort(c.Effort, cfg.AllowUltra)
-			p := Probe{ID: c.ID, AccountID: c.AccountID, Model: c.Model, Effort: e, Kind: "text", Stage: "identity", State: "running", StartedAt: time.Now().Unix(), Message: "正在使用宿主 OAuth 身份探测 BPS"}
+			p := Probe{ID: c.ID, AccountID: c.AccountID, Model: c.Model, Effort: e, Kind: "text", Stage: "identity", State: "running", StartedAt: time.Now().Unix(), TimeoutSeconds: cfg.TimeoutSeconds, Message: "正在使用宿主 OAuth 身份探测 BPS"}
 			if c.Action == "probe_image" || c.Action == "probe_image_route" {
 				p.Kind, p.ImageDetail = "image", c.ImageDetail
 				p.ImageFormat = c.ImageFormat
@@ -293,7 +296,10 @@ func (s *Server) command(ctx context.Context, cfg Config) (any, error) {
 // input; request headers and complete upstream bodies are not actively copied.
 func (s *Server) runProbe(p Probe, cfg Config) {
 	started := time.Now()
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(min(cfg.TimeoutSeconds, 120))*time.Second)
+	// Keep one bounded budget for identity, uploads and all tool rounds. Do
+	// not silently cap the configured timeout or renew it for each round.
+	p.TimeoutSeconds = cfg.TimeoutSeconds
+	ctx, cancel := probeContext(cfg)
 	defer cancel()
 	err := s.probeOnce(ctx, &p, cfg)
 	p.State, p.Message = "succeeded", "BPS 接受此 OAuth 凭据并完成文本响应；不代表模型质量验收"
@@ -308,6 +314,9 @@ func (s *Server) runProbe(p Probe, cfg Config) {
 	}
 	if err != nil {
 		p.State, p.Message = "failed", err.Error()
+		if errors.Is(err, context.DeadlineExceeded) && errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			p.Message = fmt.Sprintf("探测总时间预算 %d 秒已耗尽（context deadline exceeded）；未完成探测，不代表模型或工具不受支持", p.TimeoutSeconds)
+		}
 	}
 	p.LatencyMS, p.FinishedAt = time.Since(started).Milliseconds(), time.Now().Unix()
 	s.mu.Lock()
