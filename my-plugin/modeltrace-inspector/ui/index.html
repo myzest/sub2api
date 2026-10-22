@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ModelTrace Inspector · 模型指纹检测</title>
+  <link rel="stylesheet" href="assets/styles.css">
+  <script src="assets/bridge-v1.js" defer></script>
+  <script src="assets/analysis-view.js" defer></script>
+  <script src="assets/app.js" defer></script>
+</head>
+<body>
+  <header class="app-header">
+    <div><div class="eyebrow">MODELTRACE INSPECTOR</div><h1>模型指纹检测</h1></div>
+    <span class="pill">三次挑战 · 本地归因</span>
+  </header>
+  <div id="notice" class="notice" role="status" aria-live="polite" hidden></div>
+  <div id="error" class="notice error" role="alert" hidden></div>
+  <section id="activity" class="activity" aria-live="polite" hidden>
+    <strong id="activity-title"></strong>
+    <p class="muted small">可以继续为其他账号添加测试。各账号独立运行，可分别停止。</p>
+    <div id="active-tasks"></div>
+  </section>
+  <nav class="tabs" aria-label="插件页面">
+    <button id="new-tab" class="tab active" aria-pressed="true" type="button">新建测试</button>
+    <button id="results-tab" class="tab" aria-pressed="false" type="button">结果与存储 <span id="result-count">0</span></button>
+  </nav>
+  <main>
+    <section id="new-panel">
+      <form id="test-form">
+        <div class="form-heading"><h2>选择测试账号</h2><button id="refresh-accounts" type="button">刷新账号</button></div>
+        <label for="account">OpenAI OAuth 账号</label>
+        <select id="account" required><option value="">请选择账号</option></select>
+        <p class="muted small">读取 Sub2API 已导入的账号，使用该账号的 Codex 通道和代理。暂停调度的账号暂不可测试。</p>
+        <div class="form-grid">
+          <div>
+            <div class="label-row"><label for="model">测试模型</label><button id="retry-models" class="link" type="button" hidden>重新获取</button></div>
+            <select id="model" required disabled><option value="">请选择模型</option></select>
+          </div>
+          <div><label for="effort">推理强度</label><select id="effort" required disabled><option value="">请选择推理强度</option></select></div>
+        </div>
+        <p id="model-note" class="muted small">选择账号后获取其模型和 Codex 推理档位，不预选模型或档位。</p>
+        <div class="method-card">
+          <strong>每轮三条独立数字挑战</strong>
+          <p>模型直接生成 1–355 范围的整数序列，ModelTrace 根据数字分布与排列特征计算候选模型的归因概率。每轮分别计算，不合并多轮样本。</p>
+          <p id="bank-summary" class="muted small">正在读取内置指纹库…</p>
+        </div>
+        <div class="submit-row">
+          <div class="parameter"><label for="rounds">测试轮数</label><input id="rounds" type="number" min="1" max="20" step="1" value="1" required></div>
+          <div class="parameter"><label for="timeout">单条挑战超时</label><select id="timeout"><option value="15">15 分钟</option><option value="30" selected>30 分钟</option><option value="60">60 分钟</option><option value="120">120 分钟</option><option value="0">不限时</option></select></div>
+          <div class="run-summary"><strong id="request-count">1 轮 × 3 条挑战 = 3 次请求</strong><span class="muted small">一轮三条并行，轮次依次执行；每条使用独立会话。</span></div>
+          <button id="start" class="primary" type="button" disabled>开始测试</button>
+        </div>
+        <p class="footnote">测试消耗所选账号的上游额度。关闭弹窗后继续运行；停用插件或重启容器会中断任务。每账号仅保留最新批次。</p>
+        <p class="footnote">请求数不含有限重试，实际尝试记录在结果中。归因概率仅比较内置候选，不代表智力分数或后端身份认证。</p>
+      </form>
+    </section>
+    <section id="results-panel" hidden>
+      <div class="storage-bar">
+        <div><span class="muted small">测试数据用量</span><strong id="storage-total">0 B</strong><span id="storage-detail" class="muted small">0 个账号 · 0 条回答</span></div>
+        <button id="clear-all" class="danger" type="button">清空全部结果</button>
+      </div>
+      <p class="muted small">统计本插件保存的索引与压缩回答字节数，不包含 Redis 自身的内存开销。</p>
+      <div class="result-toolbar">
+        <select id="result-account" aria-label="查看结果的账号"><option value="">请选择结果账号</option></select>
+        <button id="refresh-results" type="button">刷新结果</button>
+        <button id="clear-account" class="danger" type="button" disabled>清理此账号</button>
+      </div>
+      <div id="empty" class="empty"><span class="empty-icon">◎</span><h2>选择一个结果账号</h2><p>测试进度、每轮归因和原始回答会保存在这里。</p></div>
+      <div id="result-layout" class="result-layout" hidden>
+        <aside>
+          <label for="batch">测试批次</label><select id="batch"></select>
+          <label for="round" class="section-gap">查看轮次</label><select id="round"></select>
+          <div id="items" class="items" role="list" aria-label="当前轮次的挑战"></div>
+        </aside>
+        <article>
+          <div id="batch-info" class="muted small"></div>
+          <p id="batch-error" class="notice error" hidden></p>
+          <section id="analysis-panel" aria-label="当前轮次的指纹归因"></section>
+          <h2 id="answer-title">选择一条原始回答</h2><div id="answer-meta" class="muted small"></div>
+          <p id="answer-error" class="notice error" hidden></p>
+          <p id="answer-retry" class="notice" hidden></p>
+          <p id="answer-quality" class="notice" hidden></p>
+          <pre id="answer-text" tabindex="0"></pre>
+          <details id="reasoning-section" hidden><summary>模型返回的推理摘要</summary><pre id="answer-reasoning"></pre></details>
+          <details id="prompt-section" hidden><summary>本次完整提示词</summary><pre id="answer-prompt"></pre></details>
+          <details id="usage-section" hidden><summary>请求信息</summary><pre id="answer-usage"></pre></details>
+        </article>
+      </div>
+    </section>
+  </main>
+  <dialog id="confirm-dialog">
+    <h2 id="confirm-title">确认清理</h2><p id="confirm-body"></p>
+    <div class="dialog-actions"><button id="confirm-cancel" type="button">取消</button><button id="confirm-ok" class="danger solid" type="button">确认清理</button></div>
+  </dialog>
+</body>
+</html>

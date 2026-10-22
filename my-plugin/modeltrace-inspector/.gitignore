@@ -1,0 +1,8 @@
+/dist/
+/build/
+/.signing/
+/node_modules/
+/test-results/
+# Keep regression scripts despite the parent repository's global tests rule.
+!/tests/
+!/tests/**

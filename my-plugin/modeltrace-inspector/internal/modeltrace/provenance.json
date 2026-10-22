@@ -1,0 +1,14 @@
+{
+  "repository": "https://github.com/xqy2006/ModelTrace",
+  "revision": "6cd4a8ff0f3f4e49d6d6969dd2fbadfa1569fde2",
+  "license": "MIT",
+  "files": {
+    "data/unified_bank.json": "f267d0513aa06981d024ec5394746fceddf44e4e8a75fa6bf8304255f4b32d6d",
+    "static/fingerprint-core.js": "83fa5bd611e18f8339122582335123c8ea168ed242298bb31f4e363abeeb6e4a",
+    "static/challenge-browser.js": "4a3868c9fe237cabde92f0d2bffaf32118f558f7a43fcc336874fecd2bf6be39",
+    "data/gpt_reference.jsonl": "b87e5630286308fdcec0893b89873635bf274b64a5269f41039eb46e66d3793f",
+    "data/claude_reference.jsonl": "13e5a9b266fefb96282e9857a53e3b408146dade66ca6220fa593fdff270d8a8",
+    "LICENSE": "238afb57e498990742f84b9ce6167b4e256ac06104a9938ce953bc41c14bea51"
+  },
+  "notes": "The embedded bank is byte-for-byte upstream. Go scores and prompt templates port the pinned JavaScript. Golden fixtures reuse reference samples to verify implementation parity, not independent attribution accuracy."
+}
